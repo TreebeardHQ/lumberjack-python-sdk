@@ -332,10 +332,22 @@ class Lumberjack:
         """
         cls(**kwargs)  # Triggers __new__ and __init__
 
-    def update_project_config(self, **kwargs: Any) -> None:
+    def update_project_config(self, config: Optional[Dict[str, Any]] = None, **kwargs: Any) -> None:
         """
         Update the project config.
+        
+        Args:
+            config: Optional configuration dictionary (for backward compatibility)
+            **kwargs: Configuration options as keyword arguments
         """
+        # Merge config dict if provided (for backward compatibility)
+        if config:
+            if isinstance(config, dict):
+                kwargs.update(config)
+            else:
+                # If config is not a dict, log warning and return
+                sdk_logger.warning(f"Invalid config type: {type(config)}")
+                return
 
         self._config_version = kwargs.get(
             'config_version', self._config_version)
