@@ -122,12 +122,12 @@ class LumberjackFlask:
                             span.set_attribute(f"http.query.{key}", value)
 
                     # Request body for POST/PUT/PATCH
-                    if request.method in ['POST', 'PUT', 'PATCH']:
-                        if request.content_type and 'json' in request.content_type:
-                            json_data = request.get_json(silent=True)
-                            if json_data:
-                                span.set_attribute(
-                                    "http.request.body.json", str(json_data))
+                    # if request.method in ['POST', 'PUT', 'PATCH']:
+                    #     if request.content_type and 'json' in request.content_type:
+                    #         json_data = request.get_json(silent=True)
+                    #         if json_data:
+                    #             span.set_attribute(
+                    #                 "http.request.body.json", str(json_data))
 
                 except Exception as e:
                     sdk_logger.error(

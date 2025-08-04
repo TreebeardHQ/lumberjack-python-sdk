@@ -437,7 +437,7 @@ class Lumberjack:
     def update_project_config(self, config: Optional[Dict[str, Any]] = None, **kwargs: Any) -> None:
         """
         Update the project config.
-        
+
         Args:
             config: Optional configuration dictionary (for backward compatibility)
             **kwargs: Configuration options as keyword arguments
@@ -1016,6 +1016,10 @@ class Lumberjack:
 
             # Set the context value to the object's ID
             LoggingContext.set(context_key, object_id)
+
+            span = LoggingContext.get_current_span()
+            if span:
+                span.set_attribute(f"lb_register.{context_key}", object_id)
 
             sdk_logger.debug(
                 f"Attached object to context: {context_key} = {object_id}")
