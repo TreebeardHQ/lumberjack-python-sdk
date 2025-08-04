@@ -17,7 +17,10 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "termcolor>=2.0.0"
+    "termcolor>=2.0.0",
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-instrumentation-logging>=0.45b0",
 ]
 
 [project.optional-dependencies]
