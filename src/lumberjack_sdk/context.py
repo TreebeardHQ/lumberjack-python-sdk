@@ -95,12 +95,25 @@ class LoggingContext:
         Args:
             span: The span to push onto the stack
         """
-        try:
-            current_stack = cls._span_stack.get().copy()
-        except LookupError:
-            current_stack = []
-        current_stack.append(span)
-        cls._span_stack.set(current_stack)
+        # If it's an OpenTelemetry span, the context is managed automatically
+        # We still maintain our stack for backward compatibility
+        if hasattr(span, 'is_recording'):
+            # It's an OTel span - context is handled by OTel automatically
+            # Just store for backward compatibility
+            try:
+                current_stack = cls._span_stack.get().copy()
+            except LookupError:
+                current_stack = []
+            current_stack.append(span)
+            cls._span_stack.set(current_stack)
+        else:
+            # Legacy span
+            try:
+                current_stack = cls._span_stack.get().copy()
+            except LookupError:
+                current_stack = []
+            current_stack.append(span)
+            cls._span_stack.set(current_stack)
 
     @classmethod
     def pop_span(cls) -> Optional["Span"]:
@@ -109,6 +122,8 @@ class LoggingContext:
         Returns:
             The popped span, or None if the stack is empty
         """
+        # For OpenTelemetry spans, we don't need to manage context manually
+        # Just clean up our stack for backward compatibility
         try:
             current_stack = cls._span_stack.get().copy()
         except LookupError:
@@ -126,6 +141,16 @@ class LoggingContext:
         Returns:
             The current active span, or None if no span is active
         """
+        # Try OpenTelemetry first
+        try:
+            from opentelemetry import trace
+            otel_span = trace.get_current_span()
+            if otel_span and otel_span.is_recording():
+                return otel_span
+        except ImportError:
+            pass
+        
+        # Fallback to context var stack
         try:
             current_stack = cls._span_stack.get()
         except LookupError:
@@ -139,13 +164,30 @@ class LoggingContext:
         Returns:
             The current span context derived from the active span, or None
         """
+        # Try OpenTelemetry first
+        try:
+            from opentelemetry import trace
+            otel_span = trace.get_current_span()
+            if otel_span and otel_span.is_recording():
+                span_context = otel_span.get_span_context()
+                if span_context.is_valid:
+                    from .spans import SpanContext
+                    return SpanContext(
+                        trace_id=format(span_context.trace_id, "032x"),
+                        span_id=format(span_context.span_id, "016x"),
+                        parent_span_id=None  # OTel doesn't expose parent ID directly
+                    )
+        except ImportError:
+            pass
+        
+        # Fallback to legacy span context
         current_span = cls.get_current_span()
-        if current_span:
+        if current_span and hasattr(current_span, 'trace_id'):
             from .spans import SpanContext
             return SpanContext(
                 trace_id=current_span.trace_id,
                 span_id=current_span.span_id,
-                parent_span_id=current_span.parent_span_id
+                parent_span_id=getattr(current_span, 'parent_span_id', None)
             )
         return None
 
@@ -161,5 +203,19 @@ class LoggingContext:
         Returns:
             The current trace ID, or None if no span is active
         """
+        # Try OpenTelemetry first
+        try:
+            from opentelemetry import trace
+            otel_span = trace.get_current_span()
+            if otel_span and otel_span.is_recording():
+                span_context = otel_span.get_span_context()
+                if span_context.is_valid:
+                    return format(span_context.trace_id, "032x")
+        except ImportError:
+            pass
+        
+        # Fallback to legacy spans
         current_span = cls.get_current_span()
-        return current_span.trace_id if current_span else None
+        if current_span and hasattr(current_span, 'trace_id'):
+            return current_span.trace_id
+        return None

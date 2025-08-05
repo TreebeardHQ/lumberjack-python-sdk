@@ -285,11 +285,20 @@ class Log:
                     processed_data[EXEC_TYPE_RESERVED_V2] = exc_type.__name__
                     processed_data[EXEC_VALUE_RESERVED_V2] = str(exc_value)
 
-            # Add span ID from current span context if available
-            current_span = LoggingContext.get_current_span()
-            if current_span and current_span.span_id:
-                processed_data[SPAN_ID_KEY_RESERVED_V2] = current_span.span_id
-                processed_data[TRACE_ID_KEY_RESERVED_V2] = current_span.trace_id
+            # Add trace context from OpenTelemetry if available
+            from opentelemetry import trace
+            current_span = trace.get_current_span()
+            if current_span and current_span.is_recording():
+                span_context = current_span.get_span_context()
+                if span_context.is_valid:
+                    processed_data[SPAN_ID_KEY_RESERVED_V2] = format(span_context.span_id, "016x")
+                    processed_data[TRACE_ID_KEY_RESERVED_V2] = format(span_context.trace_id, "032x")
+            else:
+                # Fallback to LoggingContext for backward compatibility
+                legacy_span = LoggingContext.get_current_span()
+                if legacy_span and hasattr(legacy_span, 'span_id'):
+                    processed_data[SPAN_ID_KEY_RESERVED_V2] = legacy_span.span_id
+                    processed_data[TRACE_ID_KEY_RESERVED_V2] = legacy_span.trace_id
 
             return processed_data
         except Exception as e:
@@ -606,7 +615,24 @@ class Log:
             logger_name: Specific logger name to attach to, or None for root logger
         """
         global _lumberjack_handler
+        
+        # Check if we're using OpenTelemetry mode
+        from .core import Lumberjack
+        lumberjack = Lumberjack._instance
+        if lumberjack and hasattr(lumberjack, 'logger') and lumberjack.logger and hasattr(lumberjack, '_logging_instrumentor'):
+            # Use OpenTelemetry LoggingInstrumentor
+            from opentelemetry.instrumentation.logging import LoggingInstrumentor
+            if not lumberjack._logging_instrumentor:
+                lumberjack._logging_instrumentor = LoggingInstrumentor()
+                lumberjack._logging_instrumentor.instrument(
+                    set_logging_format=False,  # Don't override format
+                    log_level=level
+                )
+                sdk_logger.debug(
+                    f"OpenTelemetry logging instrumentation enabled at level: {logging.getLevelName(level)}")
+            return
 
+        # Legacy mode - use custom handler
         if _lumberjack_handler is None:
             _lumberjack_handler = LumberjackHandler()
             _lumberjack_handler.setLevel(level)
@@ -651,7 +677,78 @@ class Log:
         Returns:
             True if Python logger forwarding is enabled, False otherwise
         """
-        return _lumberjack_handler is not None
+        try:
+            from opentelemetry.instrumentation.logging import LoggingInstrumentor
+            return LoggingInstrumentor().is_instrumented_by_opentelemetry
+        except ImportError:
+            return _lumberjack_handler is not None
+    
+    @staticmethod
+    def _emit_otel_log(level: str, message: str, data: Optional[Dict] = None, **kwargs) -> None:
+        """Emit a log through OpenTelemetry."""
+        try:
+            from opentelemetry import _logs as logs
+            from opentelemetry._logs import SeverityNumber
+            
+            # Get logger from Lumberjack instance
+            from .core import Lumberjack
+            lumberjack = Lumberjack._instance
+            if not lumberjack or not lumberjack.logger:
+                # Fallback to legacy behavior
+                log_data = Log._prepare_log_data(message, data, **kwargs)
+                log_data[LEVEL_KEY_RESERVED_V2] = level
+                if lumberjack:
+                    lumberjack.add(log_data)
+                else:
+                    sdk_logger.warning(f"No Lumberjack instance available for {level}: {message}")
+                return
+            
+            # Map level to OTel severity
+            severity_map = {
+                'debug': SeverityNumber.DEBUG,
+                'info': SeverityNumber.INFO,
+                'warning': SeverityNumber.WARN,
+                'error': SeverityNumber.ERROR,
+                'critical': SeverityNumber.FATAL
+            }
+            severity = severity_map.get(level, SeverityNumber.INFO)
+            
+            # Combine data and kwargs
+            attributes = {}
+            if data:
+                attributes.update(data)
+            if kwargs:
+                attributes.update(kwargs)
+            
+            # Add caller info
+            frame_info = None
+            for frame in inspect.stack():
+                if "lumberjack" not in frame.filename and "<frozen" not in frame.filename:
+                    frame_info = frame
+                    break
+            
+            if frame_info:
+                attributes["code.filepath"] = frame_info.filename
+                attributes["code.lineno"] = frame_info.lineno
+                attributes["code.function"] = frame_info.function
+            
+            # Emit log through OpenTelemetry
+            lumberjack.logger.emit(
+                severity_number=severity,
+                body=message,
+                attributes=attributes
+            )
+            
+        except Exception as e:
+            sdk_logger.error(f"Error in _emit_otel_log: {str(e)}")
+            # Fallback to legacy
+            try:
+                log_data = Log._prepare_log_data(message, data, **kwargs)
+                log_data[LEVEL_KEY_RESERVED_V2] = level
+                from .core import Lumberjack
+                Lumberjack().add(log_data)
+            except Exception as e2:
+                sdk_logger.error(f"Error in fallback logging: {str(e2)}")
 
 
 Lumberjack.register_exception_handlers(Log._handle_exception,

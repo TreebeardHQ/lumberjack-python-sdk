@@ -4,20 +4,25 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lumberjack_sdk"
-version = "0.4.25"
+version = "2.0.0"
 authors = [
     { name = "George Mayer", email = "george@treebeardhq.com" },
 ]
 description = "The Lumberjack Python SDK"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "termcolor>=2.0.0"
+    "termcolor>=2.0.0",
+    "opentelemetry-sdk>=1.27.0",
+    "opentelemetry-instrumentation-logging>=0.48b0",
+    "opentelemetry-instrumentation-flask>=0.48b0",
+    "opentelemetry-instrumentation-django>=0.48b0",
+    "opentelemetry-semantic-conventions>=0.48b0"
 ]
 
 [project.optional-dependencies]

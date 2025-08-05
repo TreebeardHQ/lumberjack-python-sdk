@@ -12,13 +12,21 @@ import threading
 import time
 import traceback
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Sequence
 
 from termcolor import colored
+from opentelemetry import trace, _logs as logs
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanProcessor
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.trace import Tracer
+from opentelemetry._logs import Logger
+from opentelemetry.instrumentation.logging import LoggingInstrumentor
 
 from lumberjack_sdk.internal_utils.flush_timer import DEFAULT_FLUSH_INTERVAL, FlushTimerWorker
 from .version import __version__
-
 from .batch import LogBatch, ObjectBatch, SpanBatch
 from .constants import (
     COMPACT_EXEC_TYPE_KEY,
@@ -50,7 +58,7 @@ from .constants import (
     LogEntry,
 )
 from .context import LoggingContext
-from .exporters import LumberjackExporter
+from .exporters import LumberjackExporter, LumberjackSpanExporter, LumberjackLogExporter
 from .internal_utils.fallback_logger import fallback_logger, sdk_logger
 from .spans import SpanContext
 
@@ -328,8 +336,11 @@ class Lumberjack:
                 lumberjack_ref=self, interval=self._flush_interval)
             self._flush_timer.start()
 
-        # Initialize exporter if we have an API key
+        # Initialize OpenTelemetry providers if we have an API key
         if self._api_key and not self._using_fallback:
+            self._initialize_otel_providers(batch_size=batch_size, batch_age=batch_age)
+            
+            # Keep legacy exporter for object registration
             self._exporter = LumberjackExporter(
                 api_key=self._api_key,
                 endpoint=self._endpoint,
@@ -337,6 +348,12 @@ class Lumberjack:
                 spans_endpoint=self._spans_endpoint,
                 project_name=self._project_name
             )
+        else:
+            # Initialize empty providers for consistency
+            self._tracer_provider = None
+            self._logger_provider = None
+            self._tracer = None
+            self._logger = None
 
         if self._api_key:
             sdk_logger.info(
@@ -387,6 +404,62 @@ class Lumberjack:
             self.shutdown()
         except Exception as e:
             sdk_logger.error(f"Error in atexit handler: {e}")
+
+    def _initialize_otel_providers(self, batch_size: int, batch_age: float) -> None:
+        """Initialize OpenTelemetry providers with Lumberjack exporters."""
+        # Create resource
+        resource_attributes = {"service.name": self._project_name} if self._project_name else {}
+        resource = Resource.create(resource_attributes)
+
+        # Initialize TracerProvider
+        self._tracer_provider = TracerProvider(resource=resource)
+        
+        # Create and add span exporter
+        self._span_exporter = LumberjackSpanExporter(
+            api_key=self._api_key,
+            endpoint=self._spans_endpoint or self._endpoint.replace('/logs/batch', '/spans/batch'),
+            project_name=self._project_name,
+            config_version=self._config_version,
+            update_callback=self.update_project_config
+        )
+        
+        span_processor = BatchSpanProcessor(
+            self._span_exporter,
+            max_queue_size=batch_size * 2,
+            max_export_batch_size=batch_size,
+            export_timeout_millis=int(batch_age * 1000)
+        )
+        self._tracer_provider.add_span_processor(span_processor)
+        
+        # Set as global provider
+        trace.set_tracer_provider(self._tracer_provider)
+        self._tracer = trace.get_tracer(__name__, __version__)
+
+        # Initialize LoggerProvider
+        self._logger_provider = LoggerProvider(resource=resource)
+        
+        # Create and add log exporter
+        self._log_exporter = LumberjackLogExporter(
+            api_key=self._api_key,
+            endpoint=self._endpoint,
+            project_name=self._project_name,
+            config_version=self._config_version,
+            update_callback=self.update_project_config
+        )
+        
+        log_processor = BatchLogRecordProcessor(
+            self._log_exporter,
+            max_queue_size=batch_size * 2,
+            max_export_batch_size=batch_size,
+            export_timeout_millis=int(batch_age * 1000)
+        )
+        self._logger_provider.add_log_record_processor(log_processor)
+        
+        # Set as global provider
+        logs.set_logger_provider(self._logger_provider)
+        self._logger = logs.get_logger(__name__, __version__)
+        
+        sdk_logger.info("OpenTelemetry providers initialized")
 
     def shutdown(self) -> None:
         """
@@ -1052,6 +1125,14 @@ class Lumberjack:
         if not self._initialized:
             return
 
+        # With OpenTelemetry, spans are automatically exported
+        # This method is kept for backward compatibility but doesn't need to do anything
+        # as spans are handled by the TracerProvider's span processors
+        if self._tracer_provider:
+            # Spans are automatically batched and exported by OTel
+            return
+
+        # Legacy path for non-OTel mode
         if not self._using_fallback and self._span_batch:
             if self._span_batch.add(span):
                 if not self._exporter:
@@ -1075,6 +1156,12 @@ class Lumberjack:
             raise RuntimeError(
                 "Lumberjack must be initialized before flushing spans")
 
+        # If using OpenTelemetry, force flush the tracer provider
+        if self._tracer_provider:
+            self._tracer_provider.force_flush()
+            return 0  # Can't easily count with OTel
+        
+        # Legacy path
         spans = self._span_batch.get_spans()
         count = len(spans)
         if spans and self._exporter:
@@ -1217,3 +1304,71 @@ class Lumberjack:
             except RuntimeError:
                 # No event loop in this thread, that's fine
                 pass
+
+    def _emit_otel_log(self, log_entry: Dict[str, Any]) -> None:
+        """Emit a log entry through OpenTelemetry logging."""
+        from opentelemetry._logs import SeverityNumber
+        from opentelemetry.trace import get_current_span
+        
+        # Map Lumberjack levels to OTel severity
+        level = log_entry.get(LEVEL_KEY_RESERVED_V2, 'info')
+        severity_map = {
+            'trace': (SeverityNumber.TRACE, SeverityNumber.TRACE2),
+            'debug': (SeverityNumber.DEBUG, SeverityNumber.DEBUG2),
+            'info': (SeverityNumber.INFO, SeverityNumber.INFO2),
+            'warning': (SeverityNumber.WARN, SeverityNumber.WARN2),
+            'error': (SeverityNumber.ERROR, SeverityNumber.ERROR2),
+            'critical': (SeverityNumber.FATAL, SeverityNumber.FATAL2)
+        }
+        severity_num, _ = severity_map.get(level, (SeverityNumber.INFO, SeverityNumber.INFO2))
+        
+        # Extract attributes from log entry
+        attributes = {}
+        
+        # Standard fields
+        if FILE_KEY_RESERVED_V2 in log_entry:
+            attributes["code.filepath"] = log_entry[FILE_KEY_RESERVED_V2]
+        if LINE_KEY_RESERVED_V2 in log_entry:
+            attributes["code.lineno"] = log_entry[LINE_KEY_RESERVED_V2]
+        if FUNCTION_KEY_RESERVED_V2 in log_entry:
+            attributes["code.function"] = log_entry[FUNCTION_KEY_RESERVED_V2]
+        if SOURCE_KEY_RESERVED_V2 in log_entry:
+            attributes["source"] = log_entry[SOURCE_KEY_RESERVED_V2]
+        
+        # Exception info
+        if EXEC_TYPE_RESERVED_V2 in log_entry:
+            attributes["exception.type"] = log_entry[EXEC_TYPE_RESERVED_V2]
+        if EXEC_VALUE_RESERVED_V2 in log_entry:
+            attributes["exception.message"] = log_entry[EXEC_VALUE_RESERVED_V2]
+        if TRACEBACK_KEY_RESERVED_V2 in log_entry:
+            attributes["exception.stacktrace"] = log_entry[TRACEBACK_KEY_RESERVED_V2]
+        
+        # Add any other fields as attributes
+        for key, value in log_entry.items():
+            if key not in {
+                MESSAGE_KEY_RESERVED_V2, LEVEL_KEY_RESERVED_V2, TS_KEY,
+                FILE_KEY_RESERVED_V2, LINE_KEY_RESERVED_V2, FUNCTION_KEY_RESERVED_V2,
+                SOURCE_KEY_RESERVED_V2, EXEC_TYPE_RESERVED_V2, EXEC_VALUE_RESERVED_V2,
+                TRACEBACK_KEY_RESERVED_V2, TRACE_ID_KEY_RESERVED_V2, SPAN_ID_KEY_RESERVED_V2
+            } and value is not None:
+                attributes[key] = value
+        
+        # Get message
+        message = log_entry.get(MESSAGE_KEY_RESERVED_V2, "")
+        
+        # Emit the log record
+        self._logger.emit(
+            severity_number=severity_num,
+            body=message,
+            attributes=attributes
+        )
+
+    @property
+    def tracer(self) -> Optional[Tracer]:
+        """Get the OpenTelemetry tracer instance."""
+        return self._tracer
+
+    @property
+    def logger(self) -> Optional[Logger]:
+        """Get the OpenTelemetry logger instance."""
+        return self._logger

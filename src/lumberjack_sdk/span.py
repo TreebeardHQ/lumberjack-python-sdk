@@ -16,7 +16,7 @@ def start_span(
     attributes: Optional[Dict[str, Any]] = None,
     span_context: Optional[SpanContext] = None
 ) -> Span:
-    """Start a new span.
+    """Start a new span using OpenTelemetry.
 
     Args:
         name: The name of the span
@@ -25,8 +25,64 @@ def start_span(
         span_context: Optional span context for distributed tracing
 
     Returns:
-        The newly created span
+        The newly created span (OpenTelemetry span)
     """
+    from opentelemetry import trace
+    from opentelemetry.trace import SpanKind as OtelSpanKind
+    from .core import Lumberjack
+    
+    # Map our SpanKind to OTel SpanKind
+    kind_map = {
+        SpanKind.INTERNAL: OtelSpanKind.INTERNAL,
+        SpanKind.SERVER: OtelSpanKind.SERVER,
+        SpanKind.CLIENT: OtelSpanKind.CLIENT,
+        SpanKind.PRODUCER: OtelSpanKind.PRODUCER,
+        SpanKind.CONSUMER: OtelSpanKind.CONSUMER,
+        SpanKind.UNSPECIFIED: OtelSpanKind.INTERNAL
+    }
+    otel_kind = kind_map.get(kind, OtelSpanKind.INTERNAL)
+    
+    # Get tracer from Lumberjack instance
+    lumberjack = Lumberjack()
+    tracer = lumberjack.tracer
+    
+    if not tracer:
+        # Fallback to legacy span creation if no OTel tracer
+        return _start_legacy_span(name, kind, attributes, span_context)
+    
+    # Create OTel context if needed
+    context = None
+    if span_context:
+        # Create a span context from our distributed tracing context
+        from opentelemetry.trace import SpanContext as OtelSpanContext, TraceFlags
+        otel_span_context = OtelSpanContext(
+            trace_id=int(span_context.trace_id, 16),
+            span_id=int(span_context.span_id, 16),
+            is_remote=True,
+            trace_flags=TraceFlags.SAMPLED
+        )
+        context = trace.set_span_in_context(trace.NonRecordingSpan(otel_span_context))
+    
+    # Start the span
+    span = tracer.start_span(
+        name=name,
+        kind=otel_kind,
+        attributes=attributes,
+        context=context
+    )
+    
+    # Set additional context in LoggingContext for backward compatibility
+    LoggingContext.push_span(span)
+    
+    return span
+
+def _start_legacy_span(
+    name: str,
+    kind: SpanKind = SpanKind.INTERNAL,
+    attributes: Optional[Dict[str, Any]] = None,
+    span_context: Optional[SpanContext] = None
+) -> Span:
+    """Legacy span creation when OpenTelemetry is not available."""
     # Get parent span context
     current_span = LoggingContext.get_current_span()
 
@@ -66,16 +122,53 @@ def end_span(span: Optional[Span] = None, status: Optional[SpanStatus] = None) -
         span: The span to end. If None, ends the current active span.
         status: Optional status to set on the span
     """
-    target_span = span or LoggingContext.get_current_span()
-
-    if target_span and not target_span.is_ended():
-        target_span.end(status)
-        _submit_span_to_core(target_span)
-
-        # If this is the current span, pop it from context
-        current_span = LoggingContext.get_current_span()
-        if current_span and current_span.span_id == target_span.span_id:
+    from opentelemetry import trace
+    from opentelemetry.trace import Status, StatusCode
+    
+    # Determine target span
+    if span is None:
+        # Try OTel current span first
+        target_span = trace.get_current_span()
+        if not target_span or not target_span.is_recording():
+            # Fallback to LoggingContext
+            target_span = LoggingContext.get_current_span()
+    else:
+        target_span = span
+    
+    if not target_span:
+        return
+    
+    # Check if it's an OpenTelemetry span
+    if hasattr(target_span, 'is_recording') and target_span.is_recording():
+        # It's an OTel span
+        if status:
+            # Map our status to OTel status
+            status_map = {
+                SpanStatusCode.UNSET: StatusCode.UNSET,
+                SpanStatusCode.OK: StatusCode.OK,
+                SpanStatusCode.ERROR: StatusCode.ERROR
+            }
+            otel_status_code = status_map.get(status.code, StatusCode.UNSET)
+            target_span.set_status(Status(otel_status_code, status.message))
+        
+        target_span.end()
+        
+        # Pop from LoggingContext if it matches
+        current_legacy_span = LoggingContext.get_current_span()
+        if current_legacy_span == target_span:
             LoggingContext.pop_span()
+    
+    elif hasattr(target_span, 'is_ended'):
+        # It's a legacy span
+        if not target_span.is_ended():
+            target_span.end(status)
+            _submit_span_to_core(target_span)
+
+            # If this is the current span, pop it from context
+            current_span = LoggingContext.get_current_span()
+            if current_span and hasattr(current_span, 'span_id') and hasattr(target_span, 'span_id'):
+                if current_span.span_id == target_span.span_id:
+                    LoggingContext.pop_span()
 
 
 def get_current_span() -> Optional[Span]:
@@ -84,6 +177,14 @@ def get_current_span() -> Optional[Span]:
     Returns:
         The current active span, or None if no span is active
     """
+    from opentelemetry import trace
+    
+    # Try OpenTelemetry first
+    otel_span = trace.get_current_span()
+    if otel_span and otel_span.is_recording():
+        return otel_span
+    
+    # Fallback to LoggingContext
     return LoggingContext.get_current_span()
 
 
@@ -93,6 +194,16 @@ def get_current_trace_id() -> Optional[str]:
     Returns:
         The current trace ID, or None if no span is active
     """
+    from opentelemetry import trace
+    
+    # Try OpenTelemetry first
+    otel_span = trace.get_current_span()
+    if otel_span and otel_span.is_recording():
+        span_context = otel_span.get_span_context()
+        if span_context.is_valid:
+            return format(span_context.trace_id, "032x")
+    
+    # Fallback to LoggingContext
     return LoggingContext.get_trace_id()
 
 
@@ -104,8 +215,12 @@ def set_span_attribute(key: str, value: Any, span: Optional[Span] = None) -> Non
         value: The attribute value
         span: The span to set the attribute on. If None, uses current active span.
     """
-    target_span = span or LoggingContext.get_current_span()
-    if target_span:
+    if span:
+        target_span = span
+    else:
+        target_span = get_current_span()
+    
+    if target_span and hasattr(target_span, 'set_attribute'):
         target_span.set_attribute(key, value)
 
 
@@ -121,8 +236,12 @@ def add_span_event(
         attributes: Optional event attributes
         span: The span to add the event to. If None, uses current active span.
     """
-    target_span = span or LoggingContext.get_current_span()
-    if target_span:
+    if span:
+        target_span = span
+    else:
+        target_span = get_current_span()
+    
+    if target_span and hasattr(target_span, 'add_event'):
         target_span.add_event(name, attributes)
 
 
@@ -252,17 +371,47 @@ def span_context(
             span.set_attribute("key", "value")
             # do work
     """
-    span = start_span(name, kind, attributes)
-    try:
-        yield span
-    except Exception as e:
-        if record_exception:
-            record_exception_on_span(e, span, escaped=True)
-        else:
-            span.status = SpanStatus(SpanStatusCode.ERROR, str(e))
-        raise
-    finally:
-        end_span(span)
+    from opentelemetry import trace
+    from .core import Lumberjack
+    
+    # Check if we have OpenTelemetry tracer
+    lumberjack = Lumberjack()
+    if lumberjack.tracer:
+        # Use OpenTelemetry's context manager
+        from opentelemetry.trace import SpanKind as OtelSpanKind
+        kind_map = {
+            SpanKind.INTERNAL: OtelSpanKind.INTERNAL,
+            SpanKind.SERVER: OtelSpanKind.SERVER,
+            SpanKind.CLIENT: OtelSpanKind.CLIENT,
+            SpanKind.PRODUCER: OtelSpanKind.PRODUCER,
+            SpanKind.CONSUMER: OtelSpanKind.CONSUMER,
+            SpanKind.UNSPECIFIED: OtelSpanKind.INTERNAL
+        }
+        otel_kind = kind_map.get(kind, OtelSpanKind.INTERNAL)
+        
+        with lumberjack.tracer.start_as_current_span(
+            name, kind=otel_kind, attributes=attributes
+        ) as span:
+            try:
+                yield span
+            except Exception as e:
+                if record_exception and hasattr(span, 'record_exception'):
+                    span.record_exception(e)
+                    span.set_status(trace.Status(trace.StatusCode.ERROR, str(e)))
+                raise
+    else:
+        # Legacy mode
+        span = start_span(name, kind, attributes)
+        try:
+            yield span
+        except Exception as e:
+            if record_exception:
+                record_exception_on_span(e, span, escaped=True)
+            else:
+                span.status = SpanStatus(SpanStatusCode.ERROR, str(e))
+            raise
+        finally:
+            end_span(span)
 
 
 def _submit_span_to_core(span: Span) -> None:
