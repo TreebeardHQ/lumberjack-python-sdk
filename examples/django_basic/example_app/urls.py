@@ -7,4 +7,5 @@ urlpatterns = [
     path('slow/', views.slow_operation, name='slow_operation'),
     path('error/', views.error_example, name='error_example'),
     path('user/<int:user_id>/', views.user_profile, name='user_profile'),
+    path('logging-demo/', views.logging_demo, name='logging_demo'),
 ]

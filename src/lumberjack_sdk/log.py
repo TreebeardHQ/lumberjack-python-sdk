@@ -4,158 +4,37 @@ Logging utility module for Lumberjack.
 This module provides logging context management functionality,
 allowing creation and management of trace contexts.
 """
-import asyncio
 import inspect
-import logging
-import os
 import re
 import sys
-import threading
+import time
 import traceback
-import uuid
 from datetime import datetime
-from typing import Any, Dict, Optional, TextIO, Type
+from typing import Any, Dict, Mapping, Optional, Sized, cast
+from collections.abc import Mapping as ABMapping, Sequence as ABSequence
+from opentelemetry import trace
+
+
+from opentelemetry._logs import LogRecord, SeverityNumber  # type: ignore[attr-defined]
 
 from .constants import (
+    # Legacy constants for backward compatibility
     EXEC_TYPE_RESERVED_V2,
     EXEC_VALUE_RESERVED_V2,
     FILE_KEY_RESERVED_V2,
     FUNCTION_KEY_RESERVED_V2,
-    LEVEL_KEY_RESERVED_V2,
     LINE_KEY_RESERVED_V2,
     MESSAGE_KEY_RESERVED_V2,
     SOURCE_KEY_RESERVED_V2,
     SPAN_ID_KEY_RESERVED_V2,
-    TAGS_KEY,
-    TRACE_COMPLETE_ERROR_MARKER,
-    TRACE_COMPLETE_SUCCESS_MARKER,
     TRACE_ID_KEY_RESERVED_V2,
-    TRACE_NAME_KEY_RESERVED_V2,
-    TRACE_START_MARKER,
     TRACEBACK_KEY_RESERVED_V2,
-    TS_KEY,
 )
-from .context import LoggingContext
+# LoggingContext removed - using OpenTelemetry context directly
 from .core import Lumberjack
 from .internal_utils.fallback_logger import sdk_logger
 
 
-level_map = {
-    logging.DEBUG: 'debug',
-    logging.INFO: 'info',
-    logging.WARNING: 'warning',
-    logging.WARN: 'warning',  # deprecated but still used
-    logging.ERROR: 'error',
-    logging.CRITICAL: 'critical',
-    logging.FATAL: 'critical'  # alias for CRITICAL
-}
-
-
-class LumberjackHandler(logging.Handler):
-    """Custom logging handler that forwards Python logger messages to Lumberjack."""
-
-    def emit(self, record: logging.LogRecord) -> None:
-        """
-        Process and forward a log record to the Lumberjack system.
-
-        Args:
-            record: The LogRecord instance containing log data
-        """
-        # Check if we're already processing a log to prevent recursion
-        if getattr(_handler_guard, 'processing', False):
-            return
-            
-        _handler_guard.processing = True
-        try:
-            # Skip logs from the SDK itself to avoid infinite recursion
-            if (
-                'lumberjack' in record.name.lower() or
-                'lumberjack' in record.pathname or
-                record.name == 'lumberjack.sdk'
-            ):
-                return
-
-            # Get the mapped level, default to 'info'
-            lumberjack_level = level_map.get(record.levelno, 'info')
-
-            # Format the message (handles args formatting)
-            message = record.getMessage()
-
-            # Build metadata for the log entry
-            metadata = {
-                SOURCE_KEY_RESERVED_V2: "python_logger",
-                'logger_name': record.name,
-                'module': record.module,
-                'process': record.process,
-                'process_name': record.processName,
-                'thread': record.thread,
-                'thread_name': record.threadName,
-                'relative_created': record.relativeCreated,
-                'msecs': record.msecs,
-                TS_KEY: round(record.created * 1000)  # Convert to milliseconds
-            }
-
-            # Handle original message template and args if available
-            if hasattr(record, 'msg') and record.args:
-                metadata['msg_template'] = str(record.msg)
-
-                if type(record.args) == tuple:
-                    metadata['msg_args'] = [str(arg) for arg in record.args]
-                elif type(record.args) == dict:
-                    metadata['params'] = record.args
-
-            # Handle exception information
-            if record.exc_info:
-                exc_type, exc_value, exc_traceback = record.exc_info
-                if exc_type and exc_value:
-                    # Create an exception object to pass to Log methods
-                    # This will be handled by _prepare_log_data's exception handling
-                    metadata['error'] = exc_value
-
-            # Handle explicit exception text
-            if record.exc_text:
-                metadata['exc_text'] = record.exc_text
-
-            # Handle stack info
-            if record.stack_info:
-                metadata['stack_info'] = record.stack_info
-
-            # Add any extra attributes from the log record
-            # These would come from logger.info("msg", extra={"custom": "value"})
-            for key, value in record.__dict__.items():
-                if key not in {
-                    'name', 'msg', 'args', 'levelname', 'levelno', 'pathname',
-                    'filename', 'module', 'lineno', 'funcName', 'created', 'msecs',
-                    'relativeCreated', 'thread', 'threadName', 'processName', 'process',
-                    'getMessage', 'exc_info', 'exc_text', 'stack_info', 'asctime', 'message'
-                }:
-                    metadata[key] = value
-
-            # Send to Lumberjack using the same path as other Log methods
-            # This ensures consistent handling of trace_id, context, etc.
-            log_method_map = {
-                'debug': Log.debug,
-                'info': Log.info,
-                'warning': Log.warning,
-                'error': Log.error,
-                'critical': Log.critical
-            }
-
-            log_method = log_method_map.get(lumberjack_level, Log.info)
-            log_method(message, metadata)
-
-        except Exception as e:
-            # Don't let handler errors break the application
-            sdk_logger.error(f"Error in LumberjackHandler: {str(e)}")
-        finally:
-            _handler_guard.processing = False
-
-
-# Global handler instance
-_lumberjack_handler: Optional[LumberjackHandler] = None
-
-# Thread-local guard to prevent recursive logging
-_handler_guard = threading.local()
 
 
 masked_terms = {
@@ -167,11 +46,51 @@ pattern = re.compile(
 )
 
 
+def _emit_to_otel_logger(message: str, level: str, log_data: Dict[str, Any]) -> None:
+    """Emit log directly to OpenTelemetry logger.
+    
+    Args:
+        message: The log message
+        level: Log level (debug, info, warning, error, critical)
+        log_data: Additional log data/attributes
+    """
+    lumberjack = Lumberjack()
+    otel_logger = lumberjack.logger
+    
+    if not otel_logger:
+        # No logger available (not initialized or in fallback mode)
+        return
+    
+    # Map our log levels to OpenTelemetry severity
+    level_map = {
+        'debug': SeverityNumber.DEBUG,
+        'info': SeverityNumber.INFO,
+        'warning': SeverityNumber.WARN,
+        'error': SeverityNumber.ERROR,
+        'critical': SeverityNumber.FATAL
+    }
+    
+    severity = level_map.get(level, SeverityNumber.INFO)
+    
+    # Remove message and level from attributes (they're handled separately in LogRecord)
+    attributes = {k: v for k, v in log_data.items() 
+                 if k not in (MESSAGE_KEY_RESERVED_V2, 'tb_rv2_level')}
+    
+    # Create LogRecord and emit through OpenTelemetry
+    log_record = LogRecord(
+        timestamp=int(time.time_ns()),
+        severity_number=severity,
+        body=message,
+        attributes=attributes
+    )
+    otel_logger.emit(log_record)
+
+
 class Log:
     """Logging utility class for managing trace contexts and stdout override."""
 
     @staticmethod
-    def _prepare_log_data(message: str, data: Optional[Dict] = None, **kwargs) -> Dict[str, Any]:
+    def _prepare_log_data(message: str, data: Any = None, **kwargs: Dict[str, Any]) -> Dict[str, Any]:
         """Prepare log data by merging context, provided data and kwargs.
 
         Args:
@@ -186,7 +105,7 @@ class Log:
             filename = None
             line_number = None
             function_name = None
-            locals_dict = {}
+            #locals_dict: Dict[str, Any] = {}
 
             # don't take a frame from the SDK wrapper
             for frame_info in inspect.stack():
@@ -199,17 +118,14 @@ class Log:
                     #     frame_info.frame.f_locals)
                     break
 
-            # Start with the context data
-            log_data = LoggingContext.get_all()
-
-            # Add the message
-            log_data[MESSAGE_KEY_RESERVED_V2] = message
+            # Start with empty log data (context now handled by OpenTelemetry)
+            log_data: Dict[str, Any] = {}
 
             # log_data['f_locals'] = locals_dict
 
             # Merge explicit data dict if provided
             if data is not None and isinstance(data, dict):
-                log_data.update(data)
+                log_data.update(cast(Dict[str, Any], data))
             elif data is not None:
                 log_data.update({'data': data})
 
@@ -218,10 +134,19 @@ class Log:
                 log_data.update(kwargs)
 
             # Create a new dictionary to avoid modifying in place
-            processed_data = {}
-            processed_data[FILE_KEY_RESERVED_V2] = filename
-            processed_data[LINE_KEY_RESERVED_V2] = line_number
-            processed_data[FUNCTION_KEY_RESERVED_V2] = function_name
+            processed_data: Dict[str, Any] = {}
+            
+            # Use OpenTelemetry semantic conventions as primary attributes
+            if filename:
+                processed_data['code.file.path'] = filename
+                processed_data[FILE_KEY_RESERVED_V2] = filename  # Legacy compatibility
+            if line_number:
+                processed_data['code.line.number'] = line_number
+                processed_data[LINE_KEY_RESERVED_V2] = line_number  # Legacy compatibility  
+            if function_name:
+                processed_data['code.function.name'] = function_name
+                processed_data[FUNCTION_KEY_RESERVED_V2] = function_name  # Legacy compatibility
+            
             # if we haven't set the source upstream, it's from our SDK
             if not log_data.get(SOURCE_KEY_RESERVED_V2):
                 log_data[SOURCE_KEY_RESERVED_V2] = "lumberjack"
@@ -235,8 +160,16 @@ class Log:
                     processed_data[key] = value
                     continue
 
-                # Handle exceptions - these get special treatment with traceback extraction
+                # Handle exceptions - use OpenTelemetry semantic conventions as primary
                 if isinstance(value, Exception):
+                    # OpenTelemetry standard exception attributes (primary)
+                    processed_data['exception.type'] = value.__class__.__name__
+                    processed_data['exception.message'] = str(value)
+                    if value.__traceback__ is not None:
+                        processed_data['exception.stacktrace'] = '\n'.join(traceback.format_exception(
+                            type(value), value, value.__traceback__))
+                    
+                    # Legacy keys for backward compatibility
                     processed_data[EXEC_TYPE_RESERVED_V2] = value.__class__.__name__
                     processed_data[EXEC_VALUE_RESERVED_V2] = str(value)
                     if value.__traceback__ is not None:
@@ -249,7 +182,7 @@ class Log:
                 # Handle dictionaries - maintain their nested structure
                 elif isinstance(value, dict):
                     processed_data[key] = {}
-                    Log.recurse_and_collect_dict(value, processed_data[key])
+                    Log.recurse_and_collect_dict(cast(Mapping[str, Any], value), processed_data[key])
                 # Handle complex objects - extract attributes
                 elif isinstance(value, object) and not isinstance(value, (int, float, str, bool, type(None))):
                     processed_data[key] = {}
@@ -277,28 +210,31 @@ class Log:
                     else:
                         processed_data[key] = value
 
-            if TRACEBACK_KEY_RESERVED_V2 not in processed_data:
+            # Check if we have automatic exception info available and not already processed
+            if 'exception.stacktrace' not in processed_data:
                 exc_type, exc_value, exc_traceback = sys.exc_info()
                 if exc_type and exc_value and exc_traceback:
-                    processed_data[TRACEBACK_KEY_RESERVED_V2] = ''.join(traceback.format_exception(
+                    # OpenTelemetry semantic conventions (primary)
+                    processed_data['exception.type'] = exc_type.__name__
+                    processed_data['exception.message'] = str(exc_value)
+                    processed_data['exception.stacktrace'] = ''.join(traceback.format_exception(
                         exc_type, exc_value, exc_traceback))
+                    
+                    # Legacy keys for backward compatibility
                     processed_data[EXEC_TYPE_RESERVED_V2] = exc_type.__name__
                     processed_data[EXEC_VALUE_RESERVED_V2] = str(exc_value)
+                    processed_data[TRACEBACK_KEY_RESERVED_V2] = ''.join(traceback.format_exception(
+                        exc_type, exc_value, exc_traceback))
 
-            # Add trace context from OpenTelemetry if available
-            from opentelemetry import trace
+            # Add trace context for legacy compatibility (OpenTelemetry LogRecord handles this automatically)
+
             current_span = trace.get_current_span()
             if current_span and current_span.is_recording():
                 span_context = current_span.get_span_context()
                 if span_context.is_valid:
+                    # Legacy keys for backward compatibility only
                     processed_data[SPAN_ID_KEY_RESERVED_V2] = format(span_context.span_id, "016x")
                     processed_data[TRACE_ID_KEY_RESERVED_V2] = format(span_context.trace_id, "032x")
-            else:
-                # Fallback to LoggingContext for backward compatibility
-                legacy_span = LoggingContext.get_current_span()
-                if legacy_span and hasattr(legacy_span, 'span_id'):
-                    processed_data[SPAN_ID_KEY_RESERVED_V2] = legacy_span.span_id
-                    processed_data[TRACE_ID_KEY_RESERVED_V2] = legacy_span.trace_id
 
             return processed_data
         except Exception as e:
@@ -307,7 +243,7 @@ class Log:
             return {}
 
     @staticmethod
-    def debug(message: str, data: Optional[Dict] = None, **kwargs) -> None:
+    def debug(message: str, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> None:
         """Log a debug message.
 
         Args:
@@ -317,14 +253,13 @@ class Log:
         """
         try:
             log_data = Log._prepare_log_data(message, data, **kwargs)
-            log_data[LEVEL_KEY_RESERVED_V2] = 'debug'
-            Lumberjack().add(log_data)
+            _emit_to_otel_logger(message, 'debug', log_data)
         except Exception as e:
             sdk_logger.error(
                 f"Error in Log.debug : {str(e)}: {traceback.format_exc()}")
 
     @staticmethod
-    def info(message: str, data: Optional[Dict] = None, **kwargs) -> None:
+    def info(message: str, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> None:
         """Log an info message.
 
         Args:
@@ -334,14 +269,13 @@ class Log:
         """
         try:
             log_data = Log._prepare_log_data(message, data, **kwargs)
-            log_data[LEVEL_KEY_RESERVED_V2] = 'info'
-            Lumberjack().add(log_data)
+            _emit_to_otel_logger(message, 'info', log_data)
         except Exception as e:
             sdk_logger.error(
                 f"Error in Log.info : {str(e)}: {traceback.format_exc()}")
 
     @staticmethod
-    def warning(message: str, data: Optional[Dict] = None, **kwargs) -> None:
+    def warning(message: str, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> None:
         """Log a warning message.
 
         Args:
@@ -351,14 +285,13 @@ class Log:
         """
         try:
             log_data = Log._prepare_log_data(message, data, **kwargs)
-            log_data[LEVEL_KEY_RESERVED_V2] = 'warning'
-            Lumberjack().add(log_data)
+            _emit_to_otel_logger(message, 'warning', log_data)
         except Exception as e:
             sdk_logger.error(
                 f"Error in Log.warning : {str(e)}: {traceback.format_exc()}")
 
     @staticmethod
-    def warn(message: str, data: Optional[Dict] = None, **kwargs) -> None:
+    def warn(message: str,data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> None:
         """alias for warning
 
         Args:
@@ -373,7 +306,7 @@ class Log:
                 f"Error in Log.warn : {str(e)}: {traceback.format_exc()}")
 
     @staticmethod
-    def error(message: str, data: Optional[Dict] = None, **kwargs) -> None:
+    def error(message: str, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> None:
         """Log an error message.
 
         Args:
@@ -383,14 +316,13 @@ class Log:
         """
         try:
             log_data = Log._prepare_log_data(message, data, **kwargs)
-            log_data[LEVEL_KEY_RESERVED_V2] = 'error'
-            Lumberjack().add(log_data)
+            _emit_to_otel_logger(message, 'error', log_data)
         except Exception as e:
             sdk_logger.error(
                 f"Error in Log.error : {str(e)}: {traceback.format_exc()}")
 
     @staticmethod
-    def critical(message: str, data: Optional[Dict] = None, **kwargs) -> None:
+    def critical(message: str, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> None:
         """Log a critical message.
 
         Args:
@@ -400,441 +332,63 @@ class Log:
         """
         try:
             log_data = Log._prepare_log_data(message, data, **kwargs)
-            log_data[LEVEL_KEY_RESERVED_V2] = 'critical'
-            Lumberjack().add(log_data)
+            _emit_to_otel_logger(message, 'critical', log_data)
         except Exception as e:
             sdk_logger.error(
                 f"Error in Log.critical : {str(e)}: {traceback.format_exc()}")
 
-    @classmethod
-    def _handle_exception(cls, exc_type: Type[BaseException], exc_value: BaseException, exc_traceback: Any) -> None:
-        """Handle unhandled exceptions in the main thread.
-
-        Args:
-            exc_type: The type of the exception
-            exc_value: The exception instance
-            exc_traceback: The traceback object
-        """
-        try:
-
-            # Log the exception
-            Log.error(
-                "Unhandled exception in main thread",
-                error=exc_value,
-            )
-
-            # Clear the context after logging
-            LoggingContext.clear()
-
-            # Call the original exception handler
-            if Lumberjack._original_excepthook is not None:
-                Lumberjack._original_excepthook(
-                    exc_type, exc_value, exc_traceback)
-
-        except Exception as e:
-            sdk_logger.error("Handled exception in SDK", error=e)
-
-    @classmethod
-    def _handle_threading_exception(cls, args: threading.ExceptHookArgs) -> None:
-        """Handle unhandled exceptions in threads.
-
-        Args:
-            args: The exception hook arguments containing exception info
-        """
-        try:
-
-            # Log the exception
-            Log.error(
-                "Unhandled exception in thread",
-                thread_name=args.thread.name,
-                thread_id=args.thread.ident,
-                error=args.exc_value,
-
-            )
-
-            # Clear the context after logging
-            LoggingContext.clear()
-
-        # Call the original exception handler
-            if Lumberjack._original_threading_excepthook is not None:
-                Lumberjack._original_threading_excepthook(args)
-        except Exception:
-            sdk_logger.error("Handled exception in SDK")
-
-    @classmethod
-    def _handle_async_exception(cls, loop: asyncio.AbstractEventLoop, context: dict) -> None:
-        """Handle unhandled exceptions in async contexts.
-
-        Args:
-            loop: The event loop where the exception occurred
-            context: Dictionary containing exception information
-        """
-        try:
-            exception = context.get('exception')
-
-            if exception:
-                # Log the exception
-                Log.error(
-                    "Unhandled exception in async context",
-                    error=exception,
-
-                    future=context.get('future'),
-                    task=context.get('task'),
-                    message=context.get('message'),
-
-                )
-            else:
-                # Log the error message if no exception is present
-                Log.error(
-                    "Error in async context",
-                    message=context.get('message'),
-                    future=context.get('future'),
-                    task=context.get('task'),
-                )
-
-            # Clear the context after logging
-            LoggingContext.clear()
-
-        # Call the original exception handler
-            if Lumberjack._original_loop_exception_handler is not None:
-                Lumberjack._original_loop_exception_handler(loop, context)
-        except Exception:
-            sdk_logger.error("Handled exception in SDK")
 
     @staticmethod
-    def recurse_and_collect_dict(data: dict, collector: Dict[str, Any], prefix: str = "") -> Dict[str, Any]:
+    def recurse_and_collect_dict(
+        data: Mapping[str, Any],
+        collector: Dict[str, Any],
+        prefix: str = "",
+    ) -> Dict[str, Any]:
         """
         Process dictionary values while preserving structure. Handles masking of sensitive values,
         URL obfuscation, and proper handling of null/None values.
-
-        Args:
-            data: The dictionary to traverse.
-            collector: The dictionary to populate.
-            prefix: The current key prefix for nesting - only used for non-root collection.
-
-        Returns:
-            The updated collector dictionary.
         """
-        # If we're at the root level (no prefix), we're creating a new nested dict
-        if not prefix:
-            for key, value in data.items():
-                # For each key at the root level, process appropriately
-                if isinstance(value, dict):
-                    # Create a nested dictionary for dict values
-                    collector[key] = {}
-                    Log.recurse_and_collect_dict(value, collector[key], key)
-                elif isinstance(value, list):
-                    # Just store the count for lists
-                    collector[f"{key}_count"] = len(value)
-                elif isinstance(value, (str, int, float, bool, type(None))):
-                    # Process primitive values
-                    if value is None:
-                        collector[key] = "None"
-                    elif any(pw_key in key.lower() for pw_key in masked_terms):
-                        collector[key] = '*****'
-                    elif isinstance(value, str) and "url" in key.lower():
-                        collector[key] = pattern.sub(mask_pw, value)
-                    else:
-                        collector[key] = value
-                # Optionally handle other types here (e.g. sets, tuples)
-        else:
-            # We're inside a nested structure, continue adding to the passed collector
-            for key, value in data.items():
-                if isinstance(value, dict):
-                    # Create a nested dictionary for this key
-                    collector[key] = {}
-                    Log.recurse_and_collect_dict(
-                        value, collector[key], f"{prefix}_{key}")
-                elif isinstance(value, list):
-                    collector[f"{key}_count"] = len(value)
-                elif isinstance(value, (str, int, float, bool, type(None))):
-                    if value is None:
-                        collector[key] = "None"
-                    elif any(pw_key in key.lower() for pw_key in masked_terms) or any(pw_key in prefix.lower() for pw_key in masked_terms):
-                        collector[key] = '*****'
-                    elif isinstance(value, str) and "url" in key.lower():
-                        collector[key] = pattern.sub(mask_pw, value)
-                    else:
-                        collector[key] = value
-                # Optionally handle other types here
+        def process_scalar(k: str, v: Any, key_prefix: Optional[str] = None) -> Any:
+            # Handle None explicitly as string "None"
+            if v is None:
+                return "None"
+            # Mask if key or prefix matches masked terms
+            k_lower = k.lower()
+            if any(pw in k_lower for pw in masked_terms) or (
+                key_prefix is not None and any(pw in key_prefix.lower() for pw in masked_terms)
+            ):
+                return "*****"
+            # Obfuscate URLs if string and key contains "url"
+            if isinstance(v, str) and "url" in k_lower:
+                return pattern.sub(mask_pw, v)
+            return v
+
+        at_root = not prefix
+        for key, value in data.items():
+            if isinstance(value, ABMapping):
+                child: Dict[str, Any] = {}
+                collector[key] = child
+                next_prefix = key if at_root else f"{prefix}_{key}"
+                Log.recurse_and_collect_dict(cast(Mapping[str, Any], value), child, next_prefix)
+
+            elif isinstance(value, ABSequence) and not isinstance(value, (str, bytes, bytearray)):
+                sized_value = cast(Sized, value)
+                collector[f"{key}_count"] = len(sized_value)
+
+            elif isinstance(value, (str, int, float, bool, type(None))):
+                collector[key] = process_scalar(key, value, None if at_root else prefix)
+
+            else:
+                # Optional: handle other container types (set/tuple) if desired
+                collector[key] = value
 
         return collector
 
-    def extract_relevant_locals(locals_dict):
-        result = {}
-        for key, value in locals_dict.items():
-            if key.startswith("__"):
-                continue  # skip dunder
-            if isinstance(value, (type(inspect), type(os))):  # skip modules
-                continue
-            if callable(value):
-                continue  # skip functions and classes
-            try:
-                repr(value)
-            except Exception:
-                continue  # skip unrepr-able objects
-            result[key] = value
-        return result
-
-    @staticmethod
-    def enable_stdout_override() -> None:
-        """
-        Enable intercepting of stdout (print statements) and logging them as info logs.
-
-        This will capture all print statements and log them as info logs
-        while still allowing them to be printed to the original stdout.
-        """
-        StdoutOverride.enable()
-
-    @staticmethod
-    def disable_stdout_override() -> None:
-        """
-        Disable intercepting of stdout and restore original behavior.
-        """
-        StdoutOverride.disable()
-
-    @staticmethod
-    def is_stdout_override_enabled() -> bool:
-        """
-        Return whether stdout override is currently enabled.
-
-        Returns:
-            True if stdout override is enabled, False otherwise
-        """
-        return StdoutOverride.is_enabled()
-
-    @staticmethod
-    def enable_python_logger_forwarding(level: int = logging.DEBUG,
-                                        logger_name: Optional[str] = None,
-                                        ) -> None:
-        """
-        Enable forwarding of Python logger messages to Lumberjack.
-
-        Args:
-            level: The minimum logging level to capture (default: DEBUG)
-            logger_name: Specific logger name to attach to, or None for root logger
-        """
-        global _lumberjack_handler
-        
-        # Check if we're using OpenTelemetry mode
-        from .core import Lumberjack
-        lumberjack = Lumberjack._instance
-        if lumberjack and hasattr(lumberjack, 'logger') and lumberjack.logger and hasattr(lumberjack, '_logging_instrumentor'):
-            # Use OpenTelemetry LoggingInstrumentor
-            from opentelemetry.instrumentation.logging import LoggingInstrumentor
-            if not lumberjack._logging_instrumentor:
-                lumberjack._logging_instrumentor = LoggingInstrumentor()
-                lumberjack._logging_instrumentor.instrument(
-                    set_logging_format=False,  # Don't override format
-                    log_level=level
-                )
-                sdk_logger.debug(
-                    f"OpenTelemetry logging instrumentation enabled at level: {logging.getLevelName(level)}")
-            return
-
-        # Legacy mode - use custom handler
-        if _lumberjack_handler is None:
-            _lumberjack_handler = LumberjackHandler()
-            _lumberjack_handler.setLevel(level)
-
-            # Get the target logger (root logger if no name specified)
-            target_logger = logging.getLogger(logger_name)
-            target_logger.addHandler(_lumberjack_handler)
-
-            # Ensure the logger level allows our handler to receive messages
-            if target_logger.level > level:
-                target_logger.setLevel(level)
-
-            sdk_logger.debug(
-                f"Lumberjack Python logger forwarding enabled for logger: {logger_name or 'root'}")
-
-    @staticmethod
-    def disable_python_logger_forwarding(logger_name: Optional[str] = None) -> None:
-        """
-        Disable forwarding of Python logger messages to Lumberjack.
-
-        Args:
-            logger_name: Specific logger name to detach from, or None for root logger
-        """
-        global _lumberjack_handler
-
-        if _lumberjack_handler is not None:
-            target_logger = logging.getLogger(logger_name)
-            target_logger.removeHandler(_lumberjack_handler)
-
-            # Only clear the global handler if we're removing from root logger
-            if logger_name is None:
-                _lumberjack_handler = None
-
-            sdk_logger.debug(
-                f"Lumberjack Python logger forwarding disabled for logger: {logger_name or 'root'}")
-
-    @staticmethod
-    def is_python_logger_forwarding_enabled() -> bool:
-        """
-        Return whether Python logger forwarding is currently enabled.
-
-        Returns:
-            True if Python logger forwarding is enabled, False otherwise
-        """
-        try:
-            from opentelemetry.instrumentation.logging import LoggingInstrumentor
-            return LoggingInstrumentor().is_instrumented_by_opentelemetry
-        except ImportError:
-            return _lumberjack_handler is not None
-    
-    @staticmethod
-    def _emit_otel_log(level: str, message: str, data: Optional[Dict] = None, **kwargs) -> None:
-        """Emit a log through OpenTelemetry."""
-        try:
-            from opentelemetry import _logs as logs
-            from opentelemetry._logs import SeverityNumber
-            
-            # Get logger from Lumberjack instance
-            from .core import Lumberjack
-            lumberjack = Lumberjack._instance
-            if not lumberjack or not lumberjack.logger:
-                # Fallback to legacy behavior
-                log_data = Log._prepare_log_data(message, data, **kwargs)
-                log_data[LEVEL_KEY_RESERVED_V2] = level
-                if lumberjack:
-                    lumberjack.add(log_data)
-                else:
-                    sdk_logger.warning(f"No Lumberjack instance available for {level}: {message}")
-                return
-            
-            # Map level to OTel severity
-            severity_map = {
-                'debug': SeverityNumber.DEBUG,
-                'info': SeverityNumber.INFO,
-                'warning': SeverityNumber.WARN,
-                'error': SeverityNumber.ERROR,
-                'critical': SeverityNumber.FATAL
-            }
-            severity = severity_map.get(level, SeverityNumber.INFO)
-            
-            # Combine data and kwargs
-            attributes = {}
-            if data:
-                attributes.update(data)
-            if kwargs:
-                attributes.update(kwargs)
-            
-            # Add caller info
-            frame_info = None
-            for frame in inspect.stack():
-                if "lumberjack" not in frame.filename and "<frozen" not in frame.filename:
-                    frame_info = frame
-                    break
-            
-            if frame_info:
-                attributes["code.filepath"] = frame_info.filename
-                attributes["code.lineno"] = frame_info.lineno
-                attributes["code.function"] = frame_info.function
-            
-            # Emit log through OpenTelemetry
-            lumberjack.logger.emit(
-                severity_number=severity,
-                body=message,
-                attributes=attributes
-            )
-            
-        except Exception as e:
-            sdk_logger.error(f"Error in _emit_otel_log: {str(e)}")
-            # Fallback to legacy
-            try:
-                log_data = Log._prepare_log_data(message, data, **kwargs)
-                log_data[LEVEL_KEY_RESERVED_V2] = level
-                from .core import Lumberjack
-                Lumberjack().add(log_data)
-            except Exception as e2:
-                sdk_logger.error(f"Error in fallback logging: {str(e2)}")
 
 
-Lumberjack.register_exception_handlers(Log._handle_exception,
-                                       Log._handle_threading_exception, Log._handle_async_exception)
 
 
-def mask_pw(match):
+def mask_pw(match: re.Match[str]):
     return f"{match.group('db')}://{match.group('user')}:*****@{match.group('host')}:{match.group('port')}"
 
 
-# print overrides
-class StdoutOverride:
-    """Class to override stdout and log printed messages through Lumberjack."""
-
-    _original_stdout: Optional[TextIO] = None
-    _enabled: bool = False
-
-    @classmethod
-    def enable(cls) -> None:
-        """Enable stdout override to capture prints as info logs."""
-        if not cls._enabled:
-            cls._original_stdout = sys.stdout
-            sys.stdout = StdoutWriter(cls._original_stdout)
-            cls._enabled = True
-            sdk_logger.debug("Lumberjack stdout override enabled")
-
-    @classmethod
-    def disable(cls) -> None:
-        """Disable stdout override and restore original stdout."""
-        if cls._enabled and cls._original_stdout is not None:
-            sys.stdout = cls._original_stdout
-            cls._original_stdout = None
-            cls._enabled = False
-            sdk_logger.debug("Lumberjack stdout override disabled")
-
-    @classmethod
-    def is_enabled(cls) -> bool:
-        """Return whether stdout override is enabled."""
-        return cls._enabled
-
-
-_guard = threading.local()
-
-
-class StdoutWriter:
-    """Custom stdout writer that logs messages through Lumberjack."""
-
-    def __init__(self, original_stdout: TextIO):
-        """Initialize with the original stdout to forward output."""
-        self.original_stdout = original_stdout
-
-    def write(self, text: str) -> int:
-        """
-        Write text to both the original stdout and log as info.
-
-        Args:
-            text: The text to write
-
-        Returns:
-            Number of characters written
-        """
-        # don't take a frame from the SDK wrapper
-        if getattr(_guard, "busy", False):          # already inside -> just pass through
-            return self.original_stdout.write(text)
-
-        _guard.busy = True
-        try:
-            # Only log non-empty, non-whitespace strings
-            if text and not text.isspace():
-                # Strip whitespace to clean up the log
-                clean_text = text.rstrip()
-                if clean_text:
-                    # Find caller information outside the Lumberjack module
-                    # Log the printed text as info
-                    Log.info(clean_text, {
-                        SOURCE_KEY_RESERVED_V2: "print"
-                    })
-        except Exception as e:
-            # Ensure we don't break stdout functionality if logging fails
-            sdk_logger.error(f"Error in stdout override: {str(e)}")
-        finally:
-            _guard.busy = False
-
-        # Always write to the original stdout
-        return self.original_stdout.write(text)
-
-    def flush(self) -> None:
-        """Flush the original stdout."""
-        self.original_stdout.flush()

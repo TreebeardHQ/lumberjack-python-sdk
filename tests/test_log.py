@@ -1,350 +1,330 @@
-"""Tests for the Log class functionality."""
+"""Tests for OpenTelemetry log forwarding functionality."""
 import logging
-from unittest.mock import patch
+import sys
+from io import StringIO
+from unittest.mock import Mock, patch, MagicMock
+from typing import List, Dict, Any, Sequence
 
 import pytest
+from opentelemetry.sdk._logs import LogData
+from opentelemetry.sdk._logs.export import LogExportResult
 
-from lumberjack_sdk.constants import (
-    EXEC_TYPE_RESERVED_V2,
-    EXEC_VALUE_RESERVED_V2,
-    LEVEL_KEY_RESERVED_V2,
-    MESSAGE_KEY_RESERVED_V2,
-    SOURCE_KEY_RESERVED_V2,
-    TRACE_ID_KEY_RESERVED_V2,
-    TRACE_NAME_KEY_RESERVED_V2,
-    TRACEBACK_KEY_RESERVED_V2,
-)
-from lumberjack_sdk.context import LoggingContext
 from lumberjack_sdk.core import Lumberjack
 from lumberjack_sdk.log import Log
+from lumberjack_sdk.logging_instrumentation import enable_python_logger_forwarding, disable_python_logger_forwarding
+from lumberjack_sdk.exporters import LumberjackLogExporter
+
+
+class MockLogExporter:
+    """Mock log exporter to capture exported logs."""
+    
+    def __init__(self):
+        self.exported_logs: List[Dict[str, Any]] = []
+        self.export_calls = 0
+    
+    def export(self, batch: Sequence[LogData]) -> LogExportResult:
+        """Mock export method that captures logs."""
+        self.export_calls += 1
+        for log_data in batch:
+            log_record = log_data.log_record
+            self.exported_logs.append({
+                'timestamp': log_record.timestamp,
+                'severity_number': log_record.severity_number,
+                'body': log_record.body,
+                'attributes': dict(log_record.attributes) if log_record.attributes else {},
+                'trace_id': log_record.trace_id,
+                'span_id': log_record.span_id
+            })
+        return LogExportResult.SUCCESS
+    
+    def shutdown(self) -> None:
+        pass
+    
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return True
 
 
 @pytest.fixture
-def lumberjack_instance():
-    """Setup and teardown for Lumberjack instance."""
-    Lumberjack.init(api_key="test-key", endpoint="http://test.com")
-    yield Lumberjack()
-    Lumberjack.reset()
-    LoggingContext.clear()
-
-
-def test_log_with_data_dict(lumberjack_instance, mocker):
-    """Test logging with additional data dictionary."""
-    mock_add = mocker.patch.object(lumberjack_instance, 'add')
-
-    Log.error("Error occurred", {"error_code": 500, "service": "auth"})
-
-    assert mock_add.call_count == 2  # Assert it was called twice
-    log_data = mock_add.call_args_list[1][0][0]
-    assert log_data[MESSAGE_KEY_RESERVED_V2] == "Error occurred"
-
-
-def test_log_with_kwargs(lumberjack_instance, mocker):
-    """Test logging with keyword arguments."""
-    mock_add = mocker.patch.object(lumberjack_instance, 'add')
-
-    Log.warning("Resource low", cpu_usage=90, memory=95)
-
-    assert mock_add.call_count == 2  # Assert it was called twice
-    log_data = mock_add.call_args_list[1][0][0]
-    assert log_data[MESSAGE_KEY_RESERVED_V2] == "Resource low"
-    assert log_data[LEVEL_KEY_RESERVED_V2] == "warning"
-    assert log_data["cpu_usage"] == 90
-    assert log_data["memory"] == 95
-
-
-def test_log_with_both_data_and_kwargs(lumberjack_instance, mocker):
-    """Test logging with both data dict and kwargs."""
-    mock_add = mocker.patch.object(lumberjack_instance, 'add')
-
-    Log.debug(
-        "Debug info",
-        {"component": "database"},
-        query_time=15.3
-    )
-
-    assert mock_add.call_count == 2  # Assert it was called twice
-    log_data = mock_add.call_args_list[1][0][0]
-    assert log_data[MESSAGE_KEY_RESERVED_V2] == "Debug info"
-    assert log_data[LEVEL_KEY_RESERVED_V2] == "debug"
-    assert log_data["component"] == "database"
-    assert log_data["query_time"] == 15.3
-
-
-def test_log_levels(lumberjack_instance, mocker):
-    """Test all log levels."""
-    mock_add = mocker.patch.object(lumberjack_instance, 'add')
-
-    levels = ['debug', 'info',
-              'warning', 'error']
-
-    for level in levels:
-        log_method = getattr(Log, level)
-        log_method(f"{level} message")
-
-        mock_add.assert_called()
-        log_data = mock_add.call_args[0][0]
-        assert log_data[LEVEL_KEY_RESERVED_V2] == level
-        assert log_data[MESSAGE_KEY_RESERVED_V2] == f"{level} message"
-
-        mock_add.reset_mock()
+def mock_exporter():
+    """Fixture that provides a mock log exporter."""
+    return MockLogExporter()
 
 
 @pytest.fixture
-def mock_colored():
-    with patch('lumberjack_sdk.core.colored') as mock:
-        # Make colored function just return the input string
-        mock.side_effect = lambda text, color: text
-        yield mock
-
-
-@pytest.fixture
-def captured_logs(caplog):
-    """Fixture to capture logs with proper level."""
-    caplog.set_level(logging.DEBUG)
-    return caplog
-
-
-def test_fallback_metadata_formatting(captured_logs, mock_colored):
-    """Test that metadata is properly formatted in fallback logs."""
+def lumberjack_with_mock_exporter(mock_exporter):
+    """Setup Lumberjack with mock exporter."""
+    # Reset OpenTelemetry global providers to allow re-initialization
+    from opentelemetry import _logs as logs
+    from opentelemetry import trace
+    logs.set_logger_provider(None)  # type: ignore[attr-defined]
+    trace.set_tracer_provider(None)  # type: ignore[attr-defined]
+    
     Lumberjack.reset()
-    Lumberjack.init()
-
-    with patch("logging.StreamHandler.emit") as mock_emit:
-        complex_metadata = {
-            "nested": {
-                "field1": "value1",
-                "field2": ["list", "of", "values"]
-            },
-            "simple": "value"
-        }
-
-        Log.info("Message with complex metadata", data=complex_metadata)
-
-        # Verify the log was captured
-        assert mock_emit.call_count == 2
-        log_message = mock_emit.call_args_list[1][0][0].msg
-
-        # Check that the message and metadata are present
-        assert "Message with complex metadata" in log_message
-        assert 'field1": "value1"' in log_message
-        assert 'field2_count": 3' in log_message
-        assert 'simple": "value"' in log_message
-
-
-def test_switching_to_api_logging():
-    """Test that providing API key switches to API logging mode."""
-    Lumberjack.reset()
-
-    # First initialize without API key
-    Lumberjack.init()
-    assert Lumberjack()._using_fallback
-
-    # Reset and initialize with API key
-    Lumberjack.reset()
-    Lumberjack.init(api_key="test_key", endpoint="http://test.endpoint")
-
-    instance = Lumberjack()
-    assert not instance._using_fallback
-    assert instance._api_key == "test_key"
-    assert instance._endpoint == "http://test.endpoint"
-
-
-def test_python_logger_forwarding_basic(lumberjack_instance, mocker):
-    """Test basic Python logger forwarding functionality."""
-    # Ensure clean state
-    Log.disable_python_logger_forwarding()
-    LoggingContext.clear()
-
-    mock_add = mocker.patch.object(lumberjack_instance, 'add')
-
-    # Enable Python logger forwarding
-    Log.enable_python_logger_forwarding(level=logging.DEBUG)
-
-    # Create a logger and log messages
-    test_logger = logging.getLogger("test_logger")
-    test_logger.info("Test message from Python logger")
-
-    # Verify the message was captured
-    # Note: We expect 2 calls - one for auto-created trace start, one for the actual message
-    assert mock_add.call_count == 2
-    calls = mock_add.call_args_list
-
-    # The second call should be our Python logger message
-    log_data = calls[1][0][0]
-    assert log_data[MESSAGE_KEY_RESERVED_V2] == "Test message from Python logger"
-    assert log_data[LEVEL_KEY_RESERVED_V2] == "info"
-    assert log_data[SOURCE_KEY_RESERVED_V2] == "python_logger"
-    assert log_data["logger_name"] == "test_logger"
-
-    # Clean up
-    Log.disable_python_logger_forwarding()
-
-
-def test_python_logger_forwarding_with_args(lumberjack_instance, mocker):
-    """Test Python logger forwarding with message arguments."""
-    # Ensure clean state
-    Log.disable_python_logger_forwarding()
-    LoggingContext.clear()
-
-    mock_add = mocker.patch.object(lumberjack_instance, 'add')
-
-    Log.enable_python_logger_forwarding()
-
-    test_logger = logging.getLogger("test_logger")
-    test_logger.warning("User %s failed login attempt %d", "john", 3)
-
-    # Expect 2 calls - auto trace start + our message
-    assert mock_add.call_count == 2
-    log_data = mock_add.call_args_list[1][0][0]  # Get the second call
-    assert log_data[MESSAGE_KEY_RESERVED_V2] == "User john failed login attempt 3"
-    assert log_data[LEVEL_KEY_RESERVED_V2] == "warning"
-    assert log_data["msg_template"] == "User %s failed login attempt %d"
-    assert log_data["msg_args"] == ["john", "3"]
-
-    Log.disable_python_logger_forwarding()
-
-
-def test_python_logger_forwarding_with_exception(lumberjack_instance, mocker):
-    """Test Python logger forwarding with exception information."""
-    mock_add = mocker.patch.object(lumberjack_instance, 'add')
-
-    Log.enable_python_logger_forwarding()
-
-    test_logger = logging.getLogger("test_logger")
-
-    try:
-        raise ValueError("Test exception")
-    except ValueError:
-        test_logger.error("An error occurred", exc_info=True)
-
-    assert mock_add.call_count == 2  # Assert it was called twice
-    log_data = mock_add.call_args_list[1][0][0]
-    assert log_data[MESSAGE_KEY_RESERVED_V2] == "An error occurred"
-    assert log_data[LEVEL_KEY_RESERVED_V2] == "error"
-    assert log_data[EXEC_TYPE_RESERVED_V2] == "ValueError"
-    assert log_data[EXEC_VALUE_RESERVED_V2] == "Test exception"
-    assert TRACEBACK_KEY_RESERVED_V2 in log_data
-    assert "ValueError: Test exception" in log_data[TRACEBACK_KEY_RESERVED_V2]
-
-    Log.disable_python_logger_forwarding()
-
-
-def test_python_logger_forwarding_with_extra(lumberjack_instance, mocker):
-    """Test Python logger forwarding with extra attributes."""
-    mock_add = mocker.patch.object(lumberjack_instance, 'add')
-
-    Log.enable_python_logger_forwarding()
-
-    test_logger = logging.getLogger("test_logger")
-    test_logger.info("User action", extra={
-        "user_id": 123,
-        "action": "login",
-        "ip_address": "192.168.1.1"
-    })
-
-    assert mock_add.call_count == 2  # Assert it was called twice
-    log_data = mock_add.call_args_list[1][0][0]
-    assert log_data[MESSAGE_KEY_RESERVED_V2] == "User action"
-    assert log_data[LEVEL_KEY_RESERVED_V2] == "info"
-    assert log_data["user_id"] == 123
-    assert log_data["action"] == "login"
-    # Assert it was called twice
-    assert log_data["ip_address"] == "192.168.1.1"
-
-    Log.disable_python_logger_forwarding()
-
-
-def test_python_logger_level_filtering(lumberjack_instance, mocker):
-    """Test that Python logger level filtering works correctly."""
-    # Ensure clean state
-    Log.disable_python_logger_forwarding()
-    LoggingContext.clear()
-
-    mock_add = mocker.patch.object(lumberjack_instance, 'add')
-
-    # Enable forwarding only for WARNING and above
-    Log.enable_python_logger_forwarding(level=logging.WARNING)
-
-    test_logger = logging.getLogger("test_logger")
-    test_logger.debug("Debug message")  # Should not be captured
-    test_logger.info("Info message")    # Should not be captured
-    test_logger.warning("Warning message")  # Should be captured
-    test_logger.error("Error message")   # Should be captured
-
-    # Should have captured: auto trace start + WARNING + ERROR = 3 calls
-    assert mock_add.call_count == 3
-
-    # Check the captured messages (skip the first auto trace start)
-    calls = mock_add.call_args_list
-    assert calls[1][0][0][MESSAGE_KEY_RESERVED_V2] == "Warning message"
-    assert calls[1][0][0][LEVEL_KEY_RESERVED_V2] == "warning"
-    assert calls[2][0][0][MESSAGE_KEY_RESERVED_V2] == "Error message"
-    assert calls[2][0][0][LEVEL_KEY_RESERVED_V2] == "error"
-
-    Log.disable_python_logger_forwarding()
-
-
-def test_python_logger_forwarding_enable_disable():
-    """Test enabling and disabling Python logger forwarding."""
-    # Ensure clean state
-    Log.disable_python_logger_forwarding()
-
-    # Initially should be disabled
-    assert not Log.is_python_logger_forwarding_enabled()
-
-    # Enable forwarding
-    Log.enable_python_logger_forwarding()
-    assert Log.is_python_logger_forwarding_enabled()
-
-    # Disable forwarding
-    Log.disable_python_logger_forwarding()
-    assert not Log.is_python_logger_forwarding_enabled()
-
-
-def test_lumberjack_init_with_python_logger_capture():
-    """Test Lumberjack initialization with Python logger capture enabled."""
-    Lumberjack.reset()
-
-    # Initialize with Python logger capture enabled
+    
+    # Initialize Lumberjack with our custom mock exporter
     Lumberjack.init(
-        api_key="test_key",
-        capture_python_logger=True,
-        python_logger_level="INFO"
+        api_key="test-key",
+        endpoint="http://test.com",
+        custom_log_exporter=mock_exporter
     )
-
+    
     instance = Lumberjack()
-    assert instance._capture_python_logger
-    assert instance._python_logger_level == "INFO"
-
-    # Should have enabled forwarding
-    assert Log.is_python_logger_forwarding_enabled()
-
-    # Clean up
-    Log.disable_python_logger_forwarding()
+    
+    yield instance, mock_exporter
+    
+    # Cleanup
+    disable_python_logger_forwarding()
     Lumberjack.reset()
+    
+    # Reset providers again for next test
+    logs.set_logger_provider(None)  # type: ignore[attr-defined]
+    trace.set_tracer_provider(None)  # type: ignore[attr-defined]
 
 
-def test_python_logger_forwarding_without_trace_context(lumberjack_instance, mocker):
-    """Test that Python logger messages get auto-assigned trace_id when no context exists."""
-    mock_add = mocker.patch.object(lumberjack_instance, 'add')
+def test_log_api_forwards_to_exporter(lumberjack_with_mock_exporter):
+    """Test that Log.info/debug/error methods forward to the exporter."""
+    instance, mock_exporter = lumberjack_with_mock_exporter
+    
+    # Log messages using our Log API
+    Log.info("Test info message", extra_data="test")
+    Log.error("Test error message", error_code=500)
+    Log.debug("Test debug message")
+    
+    # Force flush to ensure logs are exported
+    if instance.log_processor:
+        instance.log_processor.force_flush()
+    
+    # Check that logs were exported
+    assert len(mock_exporter.exported_logs) >= 3
+    
+    # Find our logs (filter out any SDK logs)
+    exported_messages = [log['body'] for log in mock_exporter.exported_logs]
+    assert "Test info message" in exported_messages
+    assert "Test error message" in exported_messages
+    assert "Test debug message" in exported_messages
+    
+    # Check attributes are preserved
+    info_log = next(log for log in mock_exporter.exported_logs if log['body'] == "Test info message")
+    assert 'extra_data' in info_log['attributes']
+    assert info_log['attributes']['extra_data'] == "test"
 
-    Log.enable_python_logger_forwarding()
 
-    # Ensure no trace context exists
-    LoggingContext.clear()
+def test_python_logger_forwards_to_exporter(lumberjack_with_mock_exporter):
+    """Test that Python logging.Logger messages forward to the exporter."""
+    instance, mock_exporter = lumberjack_with_mock_exporter
+    
+    # Enable Python logger forwarding
+    enable_python_logger_forwarding(level=logging.DEBUG)
+    
+    # Create a test logger and log messages
+    test_logger = logging.getLogger("test.app")
+    test_logger.info("Python logger info message")
+    test_logger.error("Python logger error message")
+    test_logger.debug("Python logger debug message")
+    
+    # Force flush
+    if instance.log_processor:
+        instance.log_processor.force_flush()
+    
+    # Check that Python logs were exported
+    exported_messages = [log['body'] for log in mock_exporter.exported_logs]
+    assert "Python logger info message" in exported_messages
+    assert "Python logger error message" in exported_messages
+    assert "Python logger debug message" in exported_messages
+    
+    # Verify SDK logs are NOT exported (should be filtered out)
+    sdk_messages = [log['body'] for log in mock_exporter.exported_logs if 'lumberjack' in str(log.get('body', '')).lower()]
+    assert len(sdk_messages) == 0
 
-    # Log a message without trace context
-    test_logger = logging.getLogger("no_trace_logger")
-    test_logger.info("Message without trace context")
 
-    # Verify the message got an auto-assigned trace_id
-    mock_add.assert_called()
-    log_data = mock_add.call_args[0][0]
-    assert log_data[MESSAGE_KEY_RESERVED_V2] == "Message without trace context"
-    assert TRACE_ID_KEY_RESERVED_V2 in log_data
-    assert log_data[TRACE_ID_KEY_RESERVED_V2] is not None
+def test_print_statements_forward_to_exporter(lumberjack_with_mock_exporter):
+    """Test that print() statements are captured and forwarded to the exporter."""
+    instance, mock_exporter = lumberjack_with_mock_exporter
+    
+    # Enable stdout override to capture print statements
+    instance.enable_stdout_override()
+    
+    original_stdout = sys.stdout
+    try:
+        # Capture what would be printed
+        captured_output = StringIO()
+        sys.stdout = captured_output
+        
+        # Execute print statements
+        print("Test print statement 1")
+        print("Test print statement 2")
+        
+        # Force flush
+        if instance._log_processor:
+            instance._log_processor.force_flush()
+        
+        # Check that print statements were exported
+        exported_messages = [log['body'] for log in mock_exporter.exported_logs]
+        assert "Test print statement 1" in exported_messages
+        assert "Test print statement 2" in exported_messages
+        
+        # Check that prints have correct source attribute
+        print_logs = [log for log in mock_exporter.exported_logs if "Test print statement" in str(log.get('body', ''))]
+        assert len(print_logs) >= 2
+        for log in print_logs:
+            # StdoutOverride should set source to 'print'
+            assert log['attributes'].get('source') == 'print'
+            
+    finally:
+        sys.stdout = original_stdout
+        instance.disable_stdout_override()
 
-    assert len(log_data[TRACE_ID_KEY_RESERVED_V2]) == 32  # 32 char UUID
 
-    Log.disable_python_logger_forwarding()
+def test_trace_context_propagation(lumberjack_with_mock_exporter):
+    """Test that trace context is properly propagated to logs."""
+    instance, mock_exporter = lumberjack_with_mock_exporter
+    
+    # Enable Python logger forwarding
+    enable_python_logger_forwarding()
+    
+    # Create a span context
+    from lumberjack_sdk.span import start_span, end_span
+    
+    span = start_span("test-span")
+    try:
+        # Log within the span
+        Log.info("Message within span")
+        
+        test_logger = logging.getLogger("test.trace")
+        test_logger.warning("Python log within span")
+        
+        # Force flush
+        if instance._log_processor:
+            instance._log_processor.force_flush()
+        
+        # Check that logs have trace context
+        span_logs = [log for log in mock_exporter.exported_logs 
+                    if log['trace_id'] is not None and log['trace_id'] != 0]
+        assert len(span_logs) >= 2
+        
+        # All logs in the span should have the same trace_id
+        trace_ids = set(log['trace_id'] for log in span_logs)
+        assert len(trace_ids) == 1  # All should have same trace_id
+        
+    finally:
+        end_span(span)
+
+
+def test_exception_logging(lumberjack_with_mock_exporter):
+    """Test that exceptions are properly logged with traceback."""
+    instance, mock_exporter = lumberjack_with_mock_exporter
+    
+    try:
+        raise ValueError("Test exception for logging")
+    except ValueError as e:
+        # Log the exception
+        Log.error("An error occurred", exception=e)
+    
+    # Force flush
+    if instance.log_processor:
+        instance.log_processor.force_flush()
+    
+    # Find the error log
+    error_logs = [log for log in mock_exporter.exported_logs if log['body'] == "An error occurred"]
+    assert len(error_logs) >= 1
+    
+    error_log = error_logs[0]
+    assert 'exception' in error_log['attributes']
+
+
+def test_sdk_logs_excluded(lumberjack_with_mock_exporter):
+    """Test that our own SDK logs are excluded from forwarding."""
+    instance, mock_exporter = lumberjack_with_mock_exporter
+    
+    # Enable Python logger forwarding
+    enable_python_logger_forwarding(level=logging.DEBUG)
+    
+    # Create various loggers including SDK loggers
+    sdk_logger = logging.getLogger("lumberjack.test")
+    sdk_fallback = logging.getLogger("lumberjack.sdk")
+    app_logger = logging.getLogger("myapp")
+    
+    # Log messages from different sources
+    sdk_logger.info("SDK internal message - should be filtered")
+    sdk_fallback.debug("SDK fallback message - should be filtered")  
+    app_logger.info("Application message - should be forwarded")
+    
+    # Force flush
+    if instance.log_processor:
+        instance.log_processor.force_flush()
+    
+    # Check results
+    exported_messages = [log['body'] for log in mock_exporter.exported_logs]
+    
+    # SDK messages should NOT be in exported logs
+    assert "SDK internal message - should be filtered" not in exported_messages
+    assert "SDK fallback message - should be filtered" not in exported_messages
+    
+    # Application messages SHOULD be in exported logs
+    assert "Application message - should be forwarded" in exported_messages
+
+
+def test_log_levels_mapping(lumberjack_with_mock_exporter):
+    """Test that log levels are correctly mapped to OpenTelemetry severity."""
+    instance, mock_exporter = lumberjack_with_mock_exporter
+    
+    # Log messages at different levels
+    Log.debug("Debug level")
+    Log.info("Info level") 
+    Log.warning("Warning level")
+    Log.error("Error level")
+    Log.critical("Critical level")
+    
+    # Force flush
+    if instance.log_processor:
+        instance.log_processor.force_flush()
+    
+    # Debug: print what we actually got
+    print(f"Total exported logs: {len(mock_exporter.exported_logs)}")
+    for i, log in enumerate(mock_exporter.exported_logs):
+        print(f"Log {i}: {log['body']} -> {log['severity_number']}")
+    
+    # Check severity numbers are correct
+    log_by_message = {log['body']: log for log in mock_exporter.exported_logs}
+    
+    # OpenTelemetry severity number mappings
+    from opentelemetry._logs import SeverityNumber
+    
+    assert log_by_message["Debug level"]['severity_number'] == SeverityNumber.DEBUG
+    assert log_by_message["Info level"]['severity_number'] == SeverityNumber.INFO
+    assert log_by_message["Warning level"]['severity_number'] == SeverityNumber.WARN
+    assert log_by_message["Error level"]['severity_number'] == SeverityNumber.ERROR
+    assert log_by_message["Critical level"]['severity_number'] == SeverityNumber.FATAL
+
+
+def test_structured_logging_attributes(lumberjack_with_mock_exporter):
+    """Test that structured logging attributes are preserved."""
+    instance, mock_exporter = lumberjack_with_mock_exporter
+    
+    # Log with structured data
+    Log.info("User action", {
+        "user_id": 12345,
+        "action": "login",
+        "ip_address": "192.168.1.100",
+        "metadata": {
+            "browser": "Chrome",
+            "version": "95.0"
+        }
+    })
+    
+    # Force flush
+    if instance.log_processor:
+        instance.log_processor.force_flush()
+    
+    # Find the log
+    user_logs = [log for log in mock_exporter.exported_logs if log['body'] == "User action"]
+    assert len(user_logs) >= 1
+    
+    user_log = user_logs[0]
+    attrs = user_log['attributes']
+    
+    # Check that structured attributes are preserved
+    assert attrs.get('user_id') == 12345
+    assert attrs.get('action') == "login"
+    assert attrs.get('ip_address') == "192.168.1.100"
+    assert 'metadata' in attrs

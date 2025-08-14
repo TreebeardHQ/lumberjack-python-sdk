@@ -49,10 +49,14 @@ class LogEntry(TypedDict, total=False):
     """A typed dictionary representing a log entry."""
     lvl: str
     tid: str
+    sid: str
     msg: str
     fl: str
     ln: int
+    fn: str
     tb: str
     src: str
+    ext: str
+    exv: str
     ts: Optional[float]
     props: Optional[Dict[str, Any]]

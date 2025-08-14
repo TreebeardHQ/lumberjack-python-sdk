@@ -2,286 +2,17 @@
 Export functionality for sending logs, objects, and spans to the Lumberjack API.
 """
 import json
-import threading
-import time
-from queue import Queue
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence
+from typing import  Any, Callable, Dict, List, Optional, Sequence, cast
 
 import requests
+from opentelemetry.sdk._logs import LogRecord, LogData  # type: ignore[attr-defined]
+from opentelemetry._logs import SeverityNumber  # type: ignore[attr-defined]
+from opentelemetry.sdk._logs.export import LogExporter, LogExportResult  # type: ignore[attr-defined]
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
-from opentelemetry.sdk._logs.export import LogExporter, LogExportResult
-from opentelemetry.sdk._logs import LogRecord
-from opentelemetry.trace import Span as OtelSpan
+from opentelemetry.sdk.trace import ReadableSpan
 
 from .internal_utils.fallback_logger import sdk_logger
 
-if TYPE_CHECKING:
-    from .spans import Span
-
-
-class LogSenderWorker(threading.Thread):
-    """Worker thread to process sending requests asynchronously."""
-
-    def __init__(self, send_queue: Queue):
-        super().__init__(daemon=True)
-        self._stop_event = threading.Event()
-        self._send_queue = send_queue
-
-    def run(self) -> None:
-        while True:
-            send_fn = self._send_queue.get()
-            if send_fn is None:  # shutdown signal
-                break
-            try:
-                send_fn()
-            except Exception as e:
-                sdk_logger.error(
-                    f"Unexpected error in log sender: {str(e)}")
-            finally:
-                self._send_queue.task_done()
-
-    def stop(self) -> None:
-        self._stop_event.set()
-
-
-class LumberjackExporter:
-    """Handles exporting logs, objects, and spans to the Lumberjack API."""
-
-    def __init__(
-        self, api_key: str, endpoint: str, objects_endpoint: str,
-        spans_endpoint: Optional[str] = None, project_name: Optional[str] = None
-    ):
-        self._api_key = api_key
-        self._endpoint = endpoint
-        self._objects_endpoint = objects_endpoint
-        self._spans_endpoint = spans_endpoint or endpoint.replace(
-            '/logs/batch', '/spans/batch')
-        self._project_name = project_name
-        self._send_queue: Queue = Queue()
-        self._worker: Optional[LogSenderWorker] = None
-        self._worker_started = False
-
-    def start_worker(self) -> None:
-        """Start the background worker thread if not already started."""
-        if not self._worker_started:
-            if not self._worker or not self._worker.is_alive():
-                self._worker = LogSenderWorker(self._send_queue)
-                self._worker.start()
-                sdk_logger.info("Lumberjack log worker started.")
-            self._worker_started = True
-
-    def stop_worker(self) -> None:
-        """Stop the background worker thread."""
-        if self._worker and self._worker.is_alive():
-            self._worker.stop()
-            self._worker.join(timeout=10)
-            self._worker_started = False
-
-    def send_logs_async(
-        self, logs: List[Any], config_version: Optional[int] = None,
-        update_callback: Optional[Callable[[Dict[str, Any]], None]] = None
-    ) -> None:
-        """Queue logs to be sent asynchronously."""
-        def send_request():
-            self._send_logs(logs, config_version, update_callback)
-
-        self._send_queue.put(send_request)
-
-    def send_objects_async(
-        self, objects: List[Dict[str, Any]], config_version: Optional[int] = None,
-        update_callback: Optional[Callable[[Dict[str, Any]], None]] = None
-    ) -> None:
-        """Queue objects to be sent asynchronously."""
-        def send_request():
-            self._send_objects(objects, config_version, update_callback)
-
-        self._send_queue.put(send_request)
-
-    def send_spans_async(
-        self, spans: List["Span"], config_version: Optional[int] = None,
-        update_callback: Optional[Callable[[Dict[str, Any]], None]] = None
-    ) -> None:
-        """Queue spans to be sent asynchronously."""
-        def send_request():
-            self._send_spans(spans, config_version, update_callback)
-
-        self._send_queue.put(send_request)
-
-    def _send_logs(self, logs: List[Any], config_version: Optional[int] = None,
-                   update_callback: Optional[Callable[[Dict[str, Any]], None]] = None) -> None:
-        """Send logs to the Lumberjack API."""
-        headers = {
-            'Content-Type': 'application/json',
-            'Authorization': f'Bearer {self._api_key}'
-        }
-        data = json.dumps({
-            'logs': logs,
-            'project_name': self._project_name,
-            "v": config_version,
-            "sdk_version": 2
-        })
-
-        max_retries = 3
-        delay = 1  # seconds
-        for attempt in range(max_retries):
-            try:
-                response = requests.post(
-                    self._endpoint, headers=headers, data=data)
-                if response.ok:
-                    sdk_logger.debug(
-                        f"Logs sent successfully. logs sent: {len(logs)}")
-
-                    result = response.json()
-
-                    # we get an updated config if the server has a later config version than we
-                    # sent it
-                    if (
-                        isinstance(result, dict) and result.get(
-                            'updated_config')
-                        and update_callback
-                    ):
-                        update_callback(result.get('updated_config'))
-
-                    return result
-                else:
-                    sdk_logger.warning(
-                        f"Attempt {attempt+1} failed: {response.status_code} - {response.text}")
-            except Exception as e:
-                sdk_logger.error("error while sending logs", exc_info=e)
-            time.sleep(delay)
-        sdk_logger.error("All attempts to send logs failed.")
-
-    def _send_objects(self, objects: List[Dict[str, Any]], config_version: Optional[int] = None,
-                      update_callback: Optional[Callable[[Dict[str, Any]], None]] = None) -> None:
-        """Send object registrations to the API."""
-        headers = {
-            'Content-Type': 'application/json',
-            'Authorization': f'Bearer {self._api_key}'
-        }
-        data = json.dumps({
-            'objects': objects,
-            'project_name': self._project_name,
-            "v": config_version,
-            "sdk_version": 2
-        })
-
-        max_retries = 3
-        delay = 1  # seconds
-        for attempt in range(max_retries):
-            try:
-                sdk_logger.warning(
-                    f"Sending objects to {self._objects_endpoint}")
-                response = requests.post(
-                    self._objects_endpoint, headers=headers, data=data)
-                if response.ok:
-                    sdk_logger.debug(
-                        f"Objects sent successfully. objects sent: {len(objects)}")
-
-                    result = response.json()
-
-                    # we get an updated config if the server has a later config version than we
-                    # sent it
-                    if (
-                        isinstance(result, dict) and result.get(
-                            'updated_config')
-                        and update_callback
-                    ):
-                        update_callback(result.get('updated_config'))
-
-                    return result
-                else:
-                    sdk_logger.warning(
-                        f"Attempt {attempt+1} failed: {response.status_code} - {response.text}")
-            except Exception as e:
-                sdk_logger.error("error while sending objects", exc_info=e)
-            time.sleep(delay)
-        sdk_logger.error("All attempts to send objects failed.")
-
-    def _send_spans(
-        self, spans: List["Span"], config_version: Optional[int] = None,
-        update_callback: Optional[Callable[[Dict[str, Any]], None]] = None
-    ) -> None:
-        """Send spans to the Lumberjack API in OpenTelemetry format."""
-        headers = {
-            'Content-Type': 'application/json',
-            'Authorization': f'Bearer {self._api_key}'
-        }
-
-        # Convert spans to OpenTelemetry format
-        resource_spans = self._format_spans_for_otel(spans)
-
-        data = json.dumps({
-            'resourceSpans': resource_spans,
-            'project_name': self._project_name,
-            "v": config_version,
-            "sdk_version": 2
-        })
-
-        max_retries = 3
-        delay = 1  # seconds
-        for attempt in range(max_retries):
-            try:
-                sdk_logger.debug(f"Sending spans to {self._spans_endpoint}")
-                response = requests.post(
-                    self._spans_endpoint, headers=headers, data=data)
-                if response.ok:
-                    sdk_logger.debug(
-                        f"Spans sent successfully. spans sent: {len(spans)}")
-
-                    result = response.json()
-
-                    # we get an updated config if the server has a later config version than we
-                    # sent it
-                    if (
-                        isinstance(result, dict) and result.get(
-                            'updated_config')
-                        and update_callback
-                    ):
-                        update_callback(result.get('updated_config'))
-
-                    return result
-                else:
-                    sdk_logger.warning(
-                        f"Attempt {attempt+1} failed: {response.status_code} - {response.text} {self._spans_endpoint}")
-            except Exception as e:
-                sdk_logger.error("error while sending spans", exc_info=e)
-            time.sleep(delay)
-        sdk_logger.error("All attempts to send spans failed.")
-
-    def _format_spans_for_otel(self, spans: List["Span"]) -> List[Dict[str, Any]]:
-        """Format spans into OpenTelemetry ResourceSpans structure."""
-        if not spans:
-            return []
-
-        # Group spans by service (project) name
-        scope_spans = []
-        otel_spans = []
-
-        for span in spans:
-            otel_spans.append(span.to_otel_dict())
-
-        scope_spans.append({
-            "scope": {
-                "name": "lumberjack-python-sdk",
-                "version": "2.0"
-            },
-            "spans": otel_spans
-        })
-
-        # Create resource with service name
-        resource_attributes = []
-        if self._project_name:
-            resource_attributes.append({
-                "key": "service.name",
-                "value": {"stringValue": self._project_name}
-            })
-
-        return [{
-            "resource": {
-                "attributes": resource_attributes
-            },
-            "scopeSpans": scope_spans
-        }]
 
 
 class LumberjackSpanExporter(SpanExporter):
@@ -294,15 +25,15 @@ class LumberjackSpanExporter(SpanExporter):
         project_name: Optional[str] = None,
         config_version: Optional[int] = None,
         update_callback: Optional[Callable[[Dict[str, Any]], None]] = None
-    ):
-        self._api_key = api_key
-        self._endpoint = endpoint
-        self._project_name = project_name
-        self._config_version = config_version
-        self._update_callback = update_callback
-        self._shutdown = False
+    ) -> None:
+        self._api_key: str = api_key
+        self._endpoint: str = endpoint
+        self._project_name: Optional[str] = project_name
+        self._config_version: Optional[int] = config_version
+        self._update_callback: Optional[Callable[[Dict[str, Any]], None]] = update_callback
+        self._shutdown: bool = False
 
-    def export(self, spans: Sequence[OtelSpan]) -> SpanExportResult:
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         """Export spans to Lumberjack backend."""
         if self._shutdown:
             return SpanExportResult.FAILURE
@@ -311,15 +42,15 @@ class LumberjackSpanExporter(SpanExporter):
             # Convert OTel spans to Lumberjack format
             formatted_spans = self._format_spans(spans)
             
-            headers = {
+            headers: Dict[str, str] = {
                 'Content-Type': 'application/json',
                 'Authorization': f'Bearer {self._api_key}'
             }
             
             # Create OpenTelemetry-compliant resource spans structure
-            resource_spans = self._create_resource_spans(formatted_spans)
+            resource_spans: List[Dict[str, Any]] = self._create_resource_spans(formatted_spans)
             
-            data = json.dumps({
+            data: str = json.dumps({
                 'resourceSpans': resource_spans,
                 'project_name': self._project_name,
                 "v": self._config_version,
@@ -335,13 +66,11 @@ class LumberjackSpanExporter(SpanExporter):
                     f"Spans exported successfully. Count: {len(spans)}"
                 )
                 
-                result = response.json()
-                if (
-                    isinstance(result, dict) and 
-                    result.get('updated_config') and 
-                    self._update_callback
-                ):
-                    self._update_callback(result.get('updated_config'))
+                result: Dict[str, Any] = response.json()
+                if self._update_callback:
+                    updated_config = result.get('updated_config')
+                    if updated_config and isinstance(updated_config, dict):
+                        self._update_callback(cast(Dict[str, Any], updated_config))
                 
                 return SpanExportResult.SUCCESS
             else:
@@ -363,14 +92,16 @@ class LumberjackSpanExporter(SpanExporter):
         # No buffering in this implementation
         return True
 
-    def _format_spans(self, spans: Sequence[OtelSpan]) -> List[Dict[str, Any]]:
+    def _format_spans(self, spans: Sequence[ReadableSpan]) -> List[Dict[str, Any]]:
         """Convert OpenTelemetry spans to dictionaries."""
-        formatted_spans = []
+        formatted_spans: List[Dict[str, Any]] = []
         
         for span in spans:
             span_context = span.get_span_context()
-            
-            formatted_span = {
+            if not span_context:
+                continue
+                
+            formatted_span: Dict[str, Any] = {
                 "traceId": format(span_context.trace_id, "032x"),
                 "spanId": format(span_context.span_id, "016x"),
                 "name": span.name,
@@ -382,7 +113,7 @@ class LumberjackSpanExporter(SpanExporter):
                 }
             }
             
-            if span.parent and span.parent.span_id:
+            if span.parent and hasattr(span.parent, 'span_id') and span.parent.span_id:
                 formatted_span["parentSpanId"] = format(span.parent.span_id, "016x")
             
             if span.status.description:
@@ -438,13 +169,13 @@ class LumberjackSpanExporter(SpanExporter):
         elif isinstance(value, float):
             return {"doubleValue": value}
         elif isinstance(value, (list, tuple)):
-            return {"arrayValue": {"values": [self._format_attribute_value(v) for v in value]}}
+            return {"arrayValue": {"values": [self._format_attribute_value(v) for v in cast(Sequence[Any], value)]}}
         else:
             return {"stringValue": str(value)}
 
     def _create_resource_spans(self, spans: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Create OpenTelemetry ResourceSpans structure."""
-        scope_spans = [{
+        scope_spans: List[Dict[str, Any]] = [{
             "scope": {
                 "name": "lumberjack-python-sdk",
                 "version": "2.0"
@@ -452,7 +183,7 @@ class LumberjackSpanExporter(SpanExporter):
             "spans": spans
         }]
         
-        resource_attributes = []
+        resource_attributes: List[Dict[str, Any]] = []
         if self._project_name:
             resource_attributes.append({
                 "key": "service.name",
@@ -477,29 +208,30 @@ class LumberjackLogExporter(LogExporter):
         project_name: Optional[str] = None,
         config_version: Optional[int] = None,
         update_callback: Optional[Callable[[Dict[str, Any]], None]] = None
-    ):
-        self._api_key = api_key
-        self._endpoint = endpoint
-        self._project_name = project_name
-        self._config_version = config_version
-        self._update_callback = update_callback
-        self._shutdown = False
+    ) -> None:
+        self._api_key: str = api_key
+        self._endpoint: str = endpoint
+        self._project_name: Optional[str] = project_name
+        self._config_version: Optional[int] = config_version
+        self._update_callback: Optional[Callable[[Dict[str, Any]], None]] = update_callback
+        self._shutdown: bool = False
 
-    def export(self, batch: Sequence[LogRecord]) -> LogExportResult:
+    def export(self, batch: Sequence[LogData]) -> LogExportResult:  # type: ignore[override]
         """Export logs to Lumberjack backend."""
         if self._shutdown:
             return LogExportResult.FAILURE
 
         try:
-            # Convert OTel LogRecords to Lumberjack format
-            formatted_logs = self._format_logs(batch)
+            # Extract LogRecords from LogData and convert to Lumberjack format
+            log_records = [log_data.log_record for log_data in batch]
+            formatted_logs: List[Dict[str, Any]] = self._format_logs(log_records)
             
-            headers = {
+            headers: Dict[str, str] = {
                 'Content-Type': 'application/json',
                 'Authorization': f'Bearer {self._api_key}'
             }
             
-            data = json.dumps({
+            data: str = json.dumps({
                 'logs': formatted_logs,
                 'project_name': self._project_name,
                 "v": self._config_version,
@@ -515,13 +247,11 @@ class LumberjackLogExporter(LogExporter):
                     f"Logs exported successfully. Count: {len(batch)}"
                 )
                 
-                result = response.json()
-                if (
-                    isinstance(result, dict) and 
-                    result.get('updated_config') and 
-                    self._update_callback
-                ):
-                    self._update_callback(result.get('updated_config'))
+                result: Dict[str, Any] = response.json()
+                if self._update_callback:
+                    updated_config = result.get('updated_config')
+                    if updated_config and isinstance(updated_config, dict):
+                        self._update_callback(cast(Dict[str, Any], updated_config))
                 
                 return LogExportResult.SUCCESS
             else:
@@ -546,18 +276,29 @@ class LumberjackLogExporter(LogExporter):
     def _format_logs(self, logs: Sequence[LogRecord]) -> List[Dict[str, Any]]:
         """Convert OpenTelemetry LogRecords to Lumberjack format."""
         from .constants import (
-            COMPACT_TS_KEY, COMPACT_TRACE_ID_KEY, COMPACT_SPAN_ID_KEY,
-            COMPACT_MESSAGE_KEY, COMPACT_LEVEL_KEY, COMPACT_FILE_KEY,
-            COMPACT_LINE_KEY, COMPACT_TRACEBACK_KEY, COMPACT_SOURCE_KEY,
-            COMPACT_FUNCTION_KEY, COMPACT_EXEC_TYPE_KEY, COMPACT_EXEC_VALUE_KEY
+            COMPACT_EXEC_TYPE_KEY,
+            COMPACT_EXEC_VALUE_KEY,
+            COMPACT_FILE_KEY,
+            COMPACT_FUNCTION_KEY,
+            COMPACT_LEVEL_KEY,
+            COMPACT_LINE_KEY,
+            COMPACT_MESSAGE_KEY,
+            COMPACT_SOURCE_KEY,
+            COMPACT_SPAN_ID_KEY,
+            COMPACT_TRACE_ID_KEY,
+            COMPACT_TRACEBACK_KEY,
+            COMPACT_TS_KEY,
         )
         
-        formatted_logs = []
+        formatted_logs: List[Dict[str, Any]] = []
         
         for log_record in logs:
+            # log_record is already a LogRecord, no need to extract
+            
             # Start with basic fields
-            formatted_log = {
-                COMPACT_TS_KEY: log_record.timestamp // 1_000_000,  # Convert nanoseconds to milliseconds
+            formatted_log: Dict[str, Any] = {
+                # Convert nanoseconds to milliseconds
+                COMPACT_TS_KEY: (log_record.timestamp or 0) // 1_000_000,
                 COMPACT_MESSAGE_KEY: log_record.body or "",
                 COMPACT_LEVEL_KEY: self._severity_to_level(log_record.severity_number),
                 COMPACT_SOURCE_KEY: "lumberjack"
@@ -578,9 +319,15 @@ class LumberjackLogExporter(LogExporter):
                 
                 # Exception info
                 if "exception.type" in log_record.attributes:
-                    formatted_log[COMPACT_EXEC_TYPE_KEY] = log_record.attributes.get("exception.type", "")
-                    formatted_log[COMPACT_EXEC_VALUE_KEY] = log_record.attributes.get("exception.message", "")
-                    formatted_log[COMPACT_TRACEBACK_KEY] = log_record.attributes.get("exception.stacktrace", "")
+                    formatted_log[COMPACT_EXEC_TYPE_KEY] = log_record.attributes.get(
+                        "exception.type", ""
+                    )
+                    formatted_log[COMPACT_EXEC_VALUE_KEY] = log_record.attributes.get(
+                        "exception.message", ""
+                    )
+                    formatted_log[COMPACT_TRACEBACK_KEY] = log_record.attributes.get(
+                        "exception.stacktrace", ""
+                    )
                 
                 # Source override
                 if "source" in log_record.attributes:
@@ -605,21 +352,24 @@ class LumberjackLogExporter(LogExporter):
         
         return formatted_logs
 
-    def _severity_to_level(self, severity_number: Optional[int]) -> str:
+    def _severity_to_level(self, severity_number: Optional[SeverityNumber]) -> str:
         """Convert OpenTelemetry severity number to Lumberjack level."""
         if severity_number is None:
             return "info"
         
+        # Convert SeverityNumber to its numeric value
+        severity_value = severity_number.value
+        
         # OpenTelemetry severity mapping
-        if severity_number <= 4:  # TRACE
+        if severity_value <= 4:  # TRACE
             return "trace"
-        elif severity_number <= 8:  # DEBUG
+        elif severity_value <= 8:  # DEBUG
             return "debug"
-        elif severity_number <= 12:  # INFO
+        elif severity_value <= 12:  # INFO
             return "info"
-        elif severity_number <= 16:  # WARN
+        elif severity_value <= 16:  # WARN
             return "warning"
-        elif severity_number <= 20:  # ERROR
+        elif severity_value <= 20:  # ERROR
             return "error"
         else:  # FATAL
             return "critical"

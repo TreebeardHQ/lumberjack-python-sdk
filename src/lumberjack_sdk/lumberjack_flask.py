@@ -1,164 +1,119 @@
 """
-Flask instrumentation for Lumberjack.
+Flask instrumentation for Lumberjack using OpenTelemetry.
 
-This module provides Flask integration to automatically clear context variables
-when a request ends.
+This module provides a thin wrapper around OpenTelemetry's Flask instrumentation
+to automatically instrument Flask applications with Lumberjack's configuration.
 """
-import importlib
-import traceback
+from typing import Any, Callable, Optional, Sequence
 
 from .core import Lumberjack
-from .span import end_span, record_exception_on_span, start_span
-from .spans import SpanKind, SpanStatus, SpanStatusCode
-
 from .internal_utils.fallback_logger import sdk_logger
+
+try:
+    from opentelemetry.instrumentation.flask import FlaskInstrumentor # pyright: ignore[reportMissingTypeStubs]
+    OTEL_FLASK_AVAILABLE = True
+except ImportError:
+    OTEL_FLASK_AVAILABLE = False  # pyright: ignore[reportConstantRedefinition]
+    FlaskInstrumentor = None
 
 
 class LumberjackFlask:
-    """Flask instrumentation for Lumberjack."""
+    """Thin wrapper around OpenTelemetry Flask instrumentation."""
 
     @staticmethod
-    def _get_request():
-        try:
-            return importlib.import_module("flask").request
-        except Exception as e:
-            sdk_logger.error(
-                f"Error in LumberjackFlask._get_request : {str(e)}: {traceback.format_exc()}")
-            return None
-
-    @staticmethod
-    def instrument(app) -> None:
-        """Instrument a Flask application to clear context variables on request teardown.
+    def instrument(
+        app: Any,
+        request_hook: Optional[Callable[..., Any]] = None,
+        response_hook: Optional[Callable[..., Any]] = None,
+        tracer_provider: Optional[Any] = None,
+        excluded_urls: Optional[Sequence[str]] = None,
+        enable_commenter: bool = True,
+        commenter_options: Optional[dict[str, Any]] = None,
+        meter_provider: Optional[Any] = None,
+        **kwargs: Any
+    ) -> None:
+        """Instrument a Flask application using OpenTelemetry.
 
         Args:
             app: The Flask application to instrument
+            request_hook: Optional callback for request processing
+            response_hook: Optional callback for response processing
+            tracer_provider: Optional tracer provider (uses global if not provided)
+            excluded_urls: Optional list of URLs to exclude from tracing
+            enable_commenter: Enable SQL commenter (default: True)
+            commenter_options: Options for SQL commenter
+            meter_provider: Optional meter provider for metrics
+            **kwargs: Additional arguments passed to OpenTelemetry Flask instrumentation
+        
+        Note:
+            If tracer_provider is not provided, the global tracer provider
+            set up by Lumberjack core will be used automatically.
         """
-
         if not app:
             sdk_logger.error("LumberjackFlask: No app provided")
             return
 
         if getattr(app, "_lumberjack_instrumented", False):
+            sdk_logger.debug("LumberjackFlask: Application already instrumented")
             return
 
         try:
-            sdk_logger.info(
-                "LumberjackFlask: Instrumenting Flask application")
+            if not OTEL_FLASK_AVAILABLE:
+                sdk_logger.error(
+                    "LumberjackFlask: OpenTelemetry Flask instrumentation not available. "
+                    "Install with: pip install opentelemetry-instrumentation-flask"
+                )
+                return
 
-            @app.before_request
-            def start_trace():
-                """Start a new span when a request starts."""
-                try:
-                    request = LumberjackFlask._get_request()
+            # Ensure Lumberjack is initialized (which sets up OpenTelemetry)
+            lumberjack = Lumberjack()
+            if not lumberjack.tracer:
+                sdk_logger.warning(
+                    "LumberjackFlask: No tracer available, instrumentation may not work"
+                )
 
-                    # Get the route pattern (e.g., '/user/<id>' instead of '/user/123')
-                    if request.url_rule:
-                        route_pattern = request.url_rule.rule
-                    else:
-                        route_pattern = f"[unmatched] {request.path}"
-                    # Create a name in the format "METHOD /path/pattern"
-                    span_name = f"{request.method} {route_pattern}"
-
-                    # Check for distributed tracing headers
-                    span_context = None
-                    traceparent = request.headers.get('traceparent')
-                    if traceparent:
-                        # Parse W3C traceparent header
-                        parsed = Lumberjack.parse_traceparent(traceparent)
-                        if parsed:
-                            # Establish trace context from parent
-                            span_context = Lumberjack.establish_trace_context(
-                                trace_id=parsed['trace_id'],
-                                parent_span_id=parsed['parent_id']
-                            )
-
-                    # Start span for the HTTP request
-                    span = start_span(
-                        name=span_name,
-                        kind=SpanKind.SERVER,
-                        span_context=span_context
-                    )
-
-                    # Set HTTP attributes
-                    span.set_attribute("http.method", request.method)
-                    span.set_attribute("http.url", request.url)
-                    span.set_attribute("http.route", route_pattern)
-                    span.set_attribute("http.scheme", request.scheme)
-                    span.set_attribute("http.target", request.path)
-                    if request.remote_addr:
-                        span.set_attribute(
-                            "http.client_ip", request.remote_addr)
-
-                    # User agent information
-                    if request.user_agent:
-                        span.set_attribute(
-                            "http.user_agent", request.user_agent.string)
-                        if request.user_agent.platform:
-                            span.set_attribute(
-                                "user_agent.platform", request.user_agent.platform)
-                        if request.user_agent.browser:
-                            span.set_attribute(
-                                "user_agent.browser", request.user_agent.browser)
-                        if request.user_agent.version:
-                            span.set_attribute(
-                                "user_agent.version", request.user_agent.version)
-
-                    # Headers
-                    if request.headers.get("Referer"):
-                        span.set_attribute(
-                            "http.referer", request.headers.get("Referer"))
-                    if request.headers.get("X-Forwarded-For"):
-                        span.set_attribute(
-                            "http.x_forwarded_for",
-                            request.headers.get("X-Forwarded-For")
-                        )
-                    if request.headers.get("X-Real-IP"):
-                        span.set_attribute(
-                            "http.x_real_ip", request.headers.get("X-Real-IP"))
-
-                    # Query parameters
-                    if request.args:
-                        for key, value in request.args.to_dict(flat=True).items():
-                            span.set_attribute(f"http.query.{key}", value)
-
-                    # Request body for POST/PUT/PATCH
-                    # if request.method in ['POST', 'PUT', 'PATCH']:
-                    #     if request.content_type and 'json' in request.content_type:
-                    #         json_data = request.get_json(silent=True)
-                    #         if json_data:
-                    #             span.set_attribute(
-                    #                 "http.request.body.json", str(json_data))
-
-                except Exception as e:
-                    sdk_logger.error(
-                        f"Error in LumberjackFlask.start_trace : {str(e)}: {traceback.format_exc()}")
-
-            @app.teardown_request
-            def clear_context(exc):
-                try:
-                    """Clear the logging context and end span when a request ends."""
-                    from lumberjack_sdk.context import LoggingContext
-
-                    # End the current span
-                    current_span = LoggingContext.get_current_span()
-                    if current_span:
-                        if exc:
-                            # Record exception with full traceback
-                            record_exception_on_span(exc, current_span)
-                            end_span(current_span, SpanStatus(
-                                SpanStatusCode.ERROR))
-                        else:
-                            # Set success status
-                            end_span(current_span, SpanStatus(
-                                SpanStatusCode.OK))
-
-                except Exception as e:
-                    sdk_logger.error(
-                        f"Error in LumberjackFlask.clear_context: "
-                        f"{str(e)}: {traceback.format_exc()}")
-
+            # Use OpenTelemetry's Flask instrumentation
+            if FlaskInstrumentor:
+                # Build kwargs for instrument_app
+                instrument_kwargs: dict[str, Any] = {}
+                if request_hook is not None:
+                    instrument_kwargs["request_hook"] = request_hook
+                if response_hook is not None:
+                    instrument_kwargs["response_hook"] = response_hook
+                if tracer_provider is not None:
+                    instrument_kwargs["tracer_provider"] = tracer_provider
+                if excluded_urls is not None:
+                    instrument_kwargs["excluded_urls"] = excluded_urls
+                if enable_commenter:
+                    instrument_kwargs["enable_commenter"] = enable_commenter
+                if commenter_options is not None:
+                    instrument_kwargs["commenter_options"] = commenter_options
+                if meter_provider is not None:
+                    instrument_kwargs["meter_provider"] = meter_provider
+                
+                # Add any additional kwargs
+                instrument_kwargs.update(kwargs)
+                
+                FlaskInstrumentor().instrument_app(app, **instrument_kwargs) # pyright: ignore[reportUnknownMemberType]
+            
+            sdk_logger.info("LumberjackFlask: Flask application instrumented with OpenTelemetry")
             app._lumberjack_instrumented = True
+
         except Exception as e:
-            sdk_logger.error(
-                f"Error in LumberjackFlask.instrument: "
-                f"{str(e)}: {traceback.format_exc()}")
+            sdk_logger.error(f"LumberjackFlask: Error instrumenting Flask app: {e}")
+
+    @staticmethod
+    def uninstrument() -> None:
+        """Uninstrument Flask applications."""
+        try:
+            if not OTEL_FLASK_AVAILABLE:
+                sdk_logger.warning(
+                    "LumberjackFlask: OpenTelemetry Flask instrumentation not available"
+                )
+                return
+                
+            if FlaskInstrumentor:
+                FlaskInstrumentor().uninstrument() # pyright: ignore[reportUnknownMemberType]
+            sdk_logger.info("LumberjackFlask: Flask instrumentation removed")
+        except Exception as e:
+            sdk_logger.error(f"LumberjackFlask: Error uninstrumenting Flask: {e}")

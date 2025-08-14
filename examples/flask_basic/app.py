@@ -2,15 +2,20 @@ import time
 
 import utils
 from flask import Flask, jsonify, request
-from lumberjack_sdk import Log, Lumberjack
+from lumberjack_sdk import Log, Lumberjack, LumberjackFlask
+import logging
 
 app = Flask(__name__)
+
+logger = logging.getLogger(__name__)
 
 # Initialize Lumberjack
 Lumberjack.init(
     api_key="",
     endpoint="https://your-logging-endpoint.com/logs"
 )
+
+LumberjackFlask.instrument(app)
 
 # Configure threading support
 app.config['THREADING_ENABLED'] = True  # Enable/disable threading per request
@@ -73,6 +78,24 @@ def long_operation():
     except Exception as e:
         Log.error("Error in long operation", error=str(e))
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/error")
+def error():
+
+    try:
+        Log.info("hitting a bug")
+        print("here we go...")
+        logger.warning("WARNING..")
+        # Simulate a long-running operation
+        1/0
+
+        Log.info("Didn't hit the bug!")
+        return jsonify({"status": "completed", "duration": "30 seconds"})
+    except Exception as e:
+        logger.error("unknown error", exc_info=e)
+        return jsonify({"error": str(e)}), 500
+
 
 
 if __name__ == "__main__":

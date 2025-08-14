@@ -1,6 +1,6 @@
 # Lumberjack Django Example
 
-This example demonstrates how to integrate Lumberjack logging with a Django application using the LumberjackDjangoMiddleware.
+This example demonstrates how to integrate Lumberjack logging with a Django application using the simple OpenTelemetry-based instrumentation.
 
 ## Setup
 
@@ -10,11 +10,13 @@ This example demonstrates how to integrate Lumberjack logging with a Django appl
    pip install -r requirements.txt
    ```
 
-2. Set your Lumberjack API key as an environment variable:
+2. (Optional) Set your Lumberjack API key as an environment variable:
 
    ```bash
    export LUMBERJACK_API_KEY="your-api-key-here"
    ```
+   
+   If no API key is provided, the app will run in fallback mode with colored console logging.
 
 3. Run the Django development server:
    ```bash
@@ -23,9 +25,22 @@ This example demonstrates how to integrate Lumberjack logging with a Django appl
 
 ## Configuration
 
-This example shows two ways to configure Lumberjack in Django:
+This example uses Django settings to configure Lumberjack. Configuration is done in two places:
 
-### Method 1: Using AppConfig (Recommended)
+### Settings Configuration
+
+In `django_basic/settings.py`:
+
+```python
+# Lumberjack configuration
+LUMBERJACK_API_KEY = os.getenv("LUMBERJACK_API_KEY", "")  # Empty for fallback mode
+LUMBERJACK_PROJECT_NAME = "django-basic-example"
+LUMBERJACK_LOG_TO_STDOUT = True  # Enable for development
+LUMBERJACK_CAPTURE_PYTHON_LOGGER = True  # Capture Django's built-in logging
+LUMBERJACK_DEBUG_MODE = DEBUG  # Match Django's debug setting
+```
+
+### App Initialization
 
 In `example_app/apps.py`:
 
@@ -37,23 +52,10 @@ class ExampleAppConfig(AppConfig):
     name = "example_app"
 
     def ready(self):
-        LumberjackDjango.init(
-            project_name="django-example",
-            log_to_stdout=True,
-        )
+        # Initialize Lumberjack using Django settings
+        # LumberjackDjango.init() automatically reads settings prefixed with LUMBERJACK_
+        LumberjackDjango.init()
 ```
-
-### Method 2: Using Django Settings
-
-In `settings.py`:
-
-```python
-LUMBERJACK_API_KEY = "your-api-key-here"
-LUMBERJACK_PROJECT_NAME = "django-example"
-LUMBERJACK_LOG_TO_STDOUT = True
-```
-
-Then call `LumberjackDjango.init()` in your AppConfig's `ready()` method (it will pick up the settings automatically).
 
 ## Available Endpoints
 
@@ -62,24 +64,41 @@ Then call `LumberjackDjango.init()` in your AppConfig's `ready()` method (it wil
 - `GET /slow/` - Slow operation to demonstrate performance logging
 - `GET /error/` - Random error endpoint to demonstrate error logging
 - `GET /user/<id>/` - User profile with parameter logging
+- `GET /logging-demo/` - Comprehensive logging demonstration (Lumberjack + Django logger + print)
 
 ## How It Works
 
-The Lumberjack middleware is configured in `django_basic/settings.py`:
+This example uses OpenTelemetry-based Django instrumentation that:
 
-```python
-MIDDLEWARE = [
-    # ... other middleware
-    "lumberjack_sdk.lumberjack_django.LumberjackDjangoMiddleware",
-]
-```
+- **Automatically instruments Django** - No middleware needed! OpenTelemetry's DjangoInstrumentor handles request tracing
+- **Captures multiple log sources**:
+  - Lumberjack `Log.*` API calls with structured data
+  - Django's built-in Python logging (forwarded to Lumberjack)
+  - Print statements (if stdout capture is enabled)
+- **Provides beautiful fallback logging** - Colored console output when no API key is configured
+- **Preserves trace context** - All logs within a request share the same trace/span IDs
 
-The middleware automatically:
+## Logging Examples
 
-- Starts a new trace for each request
-- Captures request metadata (headers, query params, etc.)
-- Completes the trace when the request finishes
-- Handles errors and logs them appropriately
+The `/logging-demo/` endpoint demonstrates three types of logging:
+
+1. **Lumberjack Log API** (structured):
+   ```python
+   from lumberjack_sdk.log import Log
+   Log.info("User action", user_id=123, action="login")
+   ```
+
+2. **Django Logger** (forwarded):
+   ```python
+   import logging
+   logger = logging.getLogger(__name__)
+   logger.info("Standard Python logging message")
+   ```
+
+3. **Print Statements** (captured):
+   ```python
+   print("Debug output from print statement")
+   ```
 
 ## Example Usage
 
@@ -87,14 +106,27 @@ The middleware automatically:
 # Test basic functionality
 curl http://localhost:8000/
 
-# Test with parameters
+# Test comprehensive logging demo
+curl http://localhost:8000/logging-demo/
+
+# Test with parameters  
 curl http://localhost:8000/user/123/
 
-# Test error handling
+# Test error handling (shows formatted stacktraces)
 curl http://localhost:8000/error/
 
 # Test slow operations
 curl http://localhost:8000/slow/
 ```
 
-Each request will be automatically traced and logged to Lumberjack with context preserved throughout the request lifecycle.
+## Fallback Mode Features
+
+When running without an API key, you'll see beautiful colored console output:
+
+- 🟢 **Colored log messages** by severity (INFO=green, ERROR=red, etc.)
+- 🔍 **Trace context** shown as `[span_id|trace_id]` (grayed out)
+- 📝 **Readable attributes** (no more `tb_rv2_*` prefixes)
+- 🔴 **Formatted stacktraces** with proper indentation
+- 🚫 **No span noise** - only logs are shown
+
+Each request is automatically traced and logged with context preserved throughout the request lifecycle.
