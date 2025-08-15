@@ -1,12 +1,10 @@
 import {
-  ColumnDef,
   ColumnFiltersState,
   SortingState,
   VisibilityState,
   flexRender,
   getCoreRowModel,
   getFilteredRowModel,
-  getPaginationRowModel,
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
@@ -45,19 +43,21 @@ import { useSettings } from "@/hooks/useSettings";
 import { EditorSelectionModal } from "@/components/editor-selection-modal";
 import { createColumns } from "./columns";
 
-interface DataTableProps<TData, TValue> {
-  data: TData[];
+import type { LogEntry } from "@/types/logs";
+
+interface DataTableProps {
+  data: LogEntry[];
   isConnected?: boolean;
   isTailing?: boolean;
   onTailingChange?: (tailing: boolean) => void;
 }
 
-export function DataTable<TData, TValue>({
+export function DataTable({
   data,
   isConnected = false,
   isTailing = true,
   onTailingChange,
-}: DataTableProps<TData, TValue>) {
+}: DataTableProps) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
@@ -85,11 +85,6 @@ export function DataTable<TData, TValue>({
     }
   };
 
-  // Create columns with editor support
-  const columns = createColumns(settings?.editor || null, () => {
-    setShowEditorModal(true);
-  });
-
   const handleEditorSelect = (selectedEditor: "cursor" | "vscode" | null) => {
     if (selectedEditor) {
       setEditor(selectedEditor);
@@ -97,6 +92,11 @@ export function DataTable<TData, TValue>({
     setShowEditorModal(false);
   };
 
+  // Create columns with editor support
+  const columns = createColumns(settings?.editor || null, () => {
+    setShowEditorModal(true);
+  });
+  
   const table = useReactTable({
     data,
     columns,
@@ -108,7 +108,7 @@ export function DataTable<TData, TValue>({
     getFilteredRowModel: getFilteredRowModel(),
     onColumnVisibilityChange: setColumnVisibility,
     onGlobalFilterChange: setGlobalFilter,
-    globalFilterFn: (row, columnId, value) => {
+    globalFilterFn: (row, _columnId, value) => {
       // Search through all text fields including nested attributes
       const searchableText = [
         row.original.message,

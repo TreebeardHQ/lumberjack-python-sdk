@@ -6,7 +6,6 @@ export function LogViewer() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [isTailing, setIsTailing] = useState(true);
-  const [searchFilter, setSearchFilter] = useState("");
   const seenLogIds = useRef<Set<string>>(new Set());
   const wsRef = useRef<WebSocket | null>(null);
 

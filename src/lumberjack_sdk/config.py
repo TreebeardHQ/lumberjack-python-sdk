@@ -67,8 +67,14 @@ class LumberjackConfig:
     
     # Local server settings
     local_server_enabled: Optional[bool] = None
-    local_server_endpoint: str = "localhost:4317"
+    local_server_endpoint: str = "localhost:4317"  # Deprecated: used for fallback only
     local_server_service_name: Optional[str] = None
+    
+    # Service discovery settings
+    service_discovery_enabled: bool = True
+    service_discovery_config_path: Optional[str] = None  # Default: ~/.lumberjack.config
+    cache_max_size: int = 200
+    discovery_interval: float = 30.0
     
     # Custom exporters (for testing and custom integrations)
     custom_log_exporter: Optional[LogExporter] = None
@@ -137,7 +143,9 @@ class LumberjackConfig:
                 self.capture_stdout = env_val.lower() in ('true', '1', 'yes', 'on')
         capture_python_logger_env = os.getenv('LUMBERJACK_CAPTURE_PYTHON_LOGGER')
         if capture_python_logger_env:
-            self.capture_python_logger = capture_python_logger_env.lower() in ('true', '1', 'yes', 'on')
+            self.capture_python_logger = capture_python_logger_env.lower() in (
+                'true', '1', 'yes', 'on'
+            )
         python_logger_level_env = os.getenv('LUMBERJACK_PYTHON_LOGGER_LEVEL')
         if python_logger_level_env:
             self.python_logger_level = python_logger_level_env
@@ -148,7 +156,9 @@ class LumberjackConfig:
         # Code snippet settings
         code_snippet_enabled_env = os.getenv('LUMBERJACK_CODE_SNIPPET_ENABLED')
         if code_snippet_enabled_env:
-            self.code_snippet_enabled = code_snippet_enabled_env.lower() in ('true', '1', 'yes', 'on')
+            self.code_snippet_enabled = code_snippet_enabled_env.lower() in (
+                'true', '1', 'yes', 'on'
+            )
         context_lines_env = os.getenv('LUMBERJACK_CODE_SNIPPET_CONTEXT_LINES')
         if context_lines_env:
             try:
@@ -163,7 +173,9 @@ class LumberjackConfig:
                 pass
         if os.getenv('LUMBERJACK_CODE_SNIPPET_EXCLUDE_PATTERNS'):
             patterns = os.getenv('LUMBERJACK_CODE_SNIPPET_EXCLUDE_PATTERNS', '')
-            self.code_snippet_exclude_patterns = [p.strip() for p in patterns.split(',') if p.strip()]
+            self.code_snippet_exclude_patterns = [
+                p.strip() for p in patterns.split(',') if p.strip()
+            ]
         
         # Local server settings
         if self.local_server_enabled is None:
@@ -176,6 +188,28 @@ class LumberjackConfig:
         local_server_service_name_env = os.getenv('LUMBERJACK_LOCAL_SERVER_SERVICE_NAME')
         if local_server_service_name_env:
             self.local_server_service_name = local_server_service_name_env
+        
+        # Service discovery settings
+        service_discovery_enabled_env = os.getenv('LUMBERJACK_SERVICE_DISCOVERY_ENABLED')
+        if service_discovery_enabled_env:
+            self.service_discovery_enabled = service_discovery_enabled_env.lower() in (
+                'true', '1', 'yes', 'on'
+            )
+        service_discovery_config_path_env = os.getenv('LUMBERJACK_SERVICE_DISCOVERY_CONFIG_PATH')
+        if service_discovery_config_path_env:
+            self.service_discovery_config_path = service_discovery_config_path_env
+        cache_max_size_env = os.getenv('LUMBERJACK_CACHE_MAX_SIZE')
+        if cache_max_size_env:
+            try:
+                self.cache_max_size = int(cache_max_size_env)
+            except ValueError:
+                pass
+        discovery_interval_env = os.getenv('LUMBERJACK_DISCOVERY_INTERVAL')
+        if discovery_interval_env:
+            try:
+                self.discovery_interval = float(discovery_interval_env)
+            except ValueError:
+                pass
     
     def _set_defaults(self) -> None:
         """Set intelligent defaults based on other settings."""
@@ -226,6 +260,12 @@ class LumberjackConfig:
             raise ValueError("code_snippet_context_lines must be non-negative")
         if self.code_snippet_max_frames <= 0:
             raise ValueError("code_snippet_max_frames must be positive")
+        
+        # Validate service discovery settings
+        if self.cache_max_size <= 0:
+            raise ValueError("cache_max_size must be positive")
+        if self.discovery_interval <= 0:
+            raise ValueError("discovery_interval must be positive")
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary for serialization."""
@@ -255,6 +295,10 @@ class LumberjackConfig:
             'local_server_enabled': self.local_server_enabled,
             'local_server_endpoint': self.local_server_endpoint,
             'local_server_service_name': self.local_server_service_name,
+            'service_discovery_enabled': self.service_discovery_enabled,
+            'service_discovery_config_path': self.service_discovery_config_path,
+            'cache_max_size': self.cache_max_size,
+            'discovery_interval': self.discovery_interval,
             'custom_log_exporter': self.custom_log_exporter,
             'custom_span_exporter': self.custom_span_exporter,
         }

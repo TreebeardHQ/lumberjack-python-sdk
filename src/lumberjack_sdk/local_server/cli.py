@@ -45,9 +45,30 @@ def serve_command(args: argparse.Namespace) -> None:
         # Check if local-server dependencies are available
         try:
             from .server import start_server
+            from .service_discovery import check_existing_server, check_port_availability
         except ImportError as e:
             print("❌ Local server dependencies not installed.")
             print("Install with: pip install 'lumberjack_sdk[local-server]'")
+            sys.exit(1)
+        
+        # Check if another server is already running and provide helpful message
+        existing_server = check_existing_server()
+        if existing_server:
+            print("❌ Another Lumberjack server is already running!")
+            print(f"   PID: {existing_server.pid}")
+            print(f"   Server URL: http://{existing_server.server_url}")
+            print(f"   GRPC Port: {existing_server.grpc_port}")
+            print(f"   Last heartbeat: {existing_server.time_since_heartbeat():.1f}s ago")
+            print("\n💡 To connect to the existing server, point your SDK to:")
+            host = existing_server.server_url.split(':')[0] if ':' in existing_server.server_url else existing_server.server_url
+            print(f"   local_server_endpoint=\"{host}:{existing_server.grpc_port}\"")
+            sys.exit(1)
+        
+        # Check if GRPC port 4317 is available
+        port_error = check_port_availability(4317)
+        if port_error:
+            print(f"❌ Cannot start GRPC collector: {port_error}")
+            print("💡 Please stop the process using port 4317 and try again.")
             sys.exit(1)
         
         # Determine port

@@ -10,6 +10,7 @@ import os
 import webbrowser
 import queue
 import threading
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Set
@@ -23,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .database import get_database, LogEntry
 from .grpc_collector import GrpcCollector
+from .service_discovery import check_existing_server, write_server_config, update_heartbeat, cleanup_own_config, check_port_availability
 from ..internal_utils.fallback_logger import fallback_logger
 
 
@@ -91,6 +93,11 @@ grpc_collector: Optional[GrpcCollector] = None
 # Queue for cross-thread communication between GRPC and WebSocket
 log_broadcast_queue: queue.Queue = queue.Queue()
 
+# Heartbeat management
+heartbeat_task: Optional[asyncio.Task] = None
+server_host: str = "127.0.0.1"
+server_port: int = 8080
+
 async def process_log_broadcast_queue():
     """Background task to process log broadcasts from GRPC thread."""
     while True:
@@ -109,13 +116,54 @@ async def process_log_broadcast_queue():
             await asyncio.sleep(1)
 
 
+async def heartbeat_worker():
+    """Background task to update server heartbeat every 60 seconds."""
+    while True:
+        try:
+            await asyncio.sleep(60)  # Update every 60 seconds
+            success = update_heartbeat()
+            if success:
+                fallback_logger.debug("Heartbeat updated successfully")
+            else:
+                fallback_logger.warning("Failed to update heartbeat")
+        except asyncio.CancelledError:
+            fallback_logger.debug("Heartbeat worker cancelled")
+            break
+        except Exception as e:
+            fallback_logger.error(f"Error in heartbeat worker: {e}")
+            await asyncio.sleep(60)  # Continue trying
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application lifespan - startup and shutdown."""
     # Startup
-    global grpc_collector
+    global grpc_collector, heartbeat_task
+    
+    # Check if another server instance is already running
+    existing_server = check_existing_server()
+    if existing_server:
+        fallback_logger.error(f"Another Lumberjack server is already running!")
+        fallback_logger.error(f"  PID: {existing_server.pid}")
+        fallback_logger.error(f"  Server URL: {existing_server.server_url}")
+        fallback_logger.error(f"  GRPC Port: {existing_server.grpc_port}")
+        fallback_logger.error(f"  Last heartbeat: {existing_server.time_since_heartbeat():.1f}s ago")
+        fallback_logger.error("Shutting down to prevent conflicts.")
+        sys.exit(1)
+    
+    # Check if GRPC port 4317 is available
+    port_error = check_port_availability(4317)
+    if port_error:
+        fallback_logger.error(f"Cannot start GRPC collector: {port_error}")
+        fallback_logger.error("Please stop the process using port 4317 or use a different port.")
+        sys.exit(1)
     
     try:
+        # Write server configuration
+        server_url = f"{server_host}:{server_port}"
+        write_server_config(server_url, 4317)
+        fallback_logger.info(f"Server config written for {server_url}")
+        
         # Start GRPC collector with queue for cross-thread communication
         grpc_collector = GrpcCollector(port=4317, broadcast_queue=log_broadcast_queue)
         grpc_collector.start()
@@ -123,14 +171,34 @@ async def lifespan(app: FastAPI):
         # Start background task to process log broadcasts
         broadcast_task = asyncio.create_task(process_log_broadcast_queue())
         
+        # Start heartbeat worker
+        heartbeat_task = asyncio.create_task(heartbeat_worker())
+        
         fallback_logger.info("Local development server started successfully")
         
         yield
         
     finally:
         # Shutdown
-        if grpc_collector:
-            grpc_collector.stop()
+        try:
+            # Cancel heartbeat task
+            if heartbeat_task:
+                heartbeat_task.cancel()
+                try:
+                    await heartbeat_task
+                except asyncio.CancelledError:
+                    pass
+            
+            # Stop GRPC collector
+            if grpc_collector:
+                grpc_collector.stop()
+            
+            # Clean up server config
+            cleanup_own_config()
+            
+        except Exception as e:
+            fallback_logger.error(f"Error during shutdown: {e}")
+        
         fallback_logger.info("Local development server stopped")
 
 
@@ -405,6 +473,11 @@ def start_server(
         open_browser: Whether to open browser automatically
         log_level: Uvicorn log level
     """
+    # Set global variables for use in lifespan function
+    global server_host, server_port
+    server_host = host
+    server_port = port
+    
     # Initialize database with custom path if provided
     if db_path:
         get_database(db_path)
