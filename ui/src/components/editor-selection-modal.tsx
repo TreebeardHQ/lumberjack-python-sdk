@@ -6,11 +6,18 @@ import { Code, ExternalLink } from "lucide-react"
 interface EditorSelectionModalProps {
   open: boolean
   onSelect: (editor: Editor) => void
+  onClose?: () => void
 }
 
-export function EditorSelectionModal({ open, onSelect }: EditorSelectionModalProps) {
+export function EditorSelectionModal({ open, onSelect, onClose }: EditorSelectionModalProps) {
+  const handleOpenChange = (isOpen: boolean) => {
+    if (!isOpen) {
+      onClose?.()
+    }
+  }
+
   return (
-    <Dialog open={open} onOpenChange={() => {}}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">

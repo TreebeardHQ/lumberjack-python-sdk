@@ -51,10 +51,12 @@ export function LogViewer() {
         switch (message.type) {
           case "initial_logs":
             if (Array.isArray(message.data)) {
-              setLogs(message.data); // Keep original order (oldest first)
+              // Sort by timestamp to ensure chronological order (oldest first)
+              const sortedLogs = [...message.data].sort((a, b) => a.timestamp - b.timestamp);
+              setLogs(sortedLogs);
               // Update seen IDs set
               seenLogIds.current.clear();
-              message.data.forEach((log) => seenLogIds.current.add(log.id));
+              sortedLogs.forEach((log) => seenLogIds.current.add(log.id));
             }
             break;
 
@@ -144,21 +146,25 @@ export function LogViewer() {
   }, [isTailing, isConnected, connectWebSocket]);
 
   return (
-    <div className="container mx-auto py-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-muted-foreground">
-            🌲 Lumberjack Local development log viewer
-          </p>
+    <div className="h-screen flex flex-col overflow-hidden">
+      <div className="flex-shrink-0 px-6 py-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-muted-foreground">
+              🌲 Lumberjack Local development log viewer
+            </p>
+          </div>
         </div>
       </div>
 
-      <DataTable
-        data={logs}
-        isConnected={isConnected}
-        isTailing={isTailing}
-        onTailingChange={handleTailingChange}
-      />
+      <div className="flex-1 px-6 pb-6 overflow-hidden">
+        <DataTable
+          data={logs}
+          isConnected={isConnected}
+          isTailing={isTailing}
+          onTailingChange={handleTailingChange}
+        />
+      </div>
     </div>
   );
 }

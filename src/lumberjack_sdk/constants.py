@@ -20,6 +20,7 @@ TRACE_NAME_KEY_RESERVED_V2 = "tb_rv2_trace_name"
 SOURCE_KEY_RESERVED_V2 = "tb_rv2_source"
 EXEC_TYPE_RESERVED_V2 = "tb_rv2_exec_type"
 EXEC_VALUE_RESERVED_V2 = "tb_rv2_exec_value"
+LOGGER_NAME_KEY_RESERVED_V2 = "tb_rv2_logger_name"
 
 
 COMPACT_TRACE_ID_KEY = "tid"
@@ -35,6 +36,7 @@ COMPACT_EXEC_VALUE_KEY = "exv"
 COMPACT_TRACE_NAME_KEY = "tn"
 COMPACT_SOURCE_KEY = "src"
 COMPACT_FUNCTION_KEY = "fn"
+COMPACT_LOGGER_NAME_KEY = "lgr"
 
 
 # Trace markers

@@ -24,7 +24,8 @@ from .constants import (
     TRACE_NAME_KEY_RESERVED_V2,
     SOURCE_KEY_RESERVED_V2,
     EXEC_TYPE_RESERVED_V2,
-    EXEC_VALUE_RESERVED_V2
+    EXEC_VALUE_RESERVED_V2,
+    LOGGER_NAME_KEY_RESERVED_V2
 )
 
 
@@ -162,6 +163,7 @@ class FallbackLogExporter(LogExporter):
             SOURCE_KEY_RESERVED_V2: 'source',
             EXEC_TYPE_RESERVED_V2: 'exec_type',
             EXEC_VALUE_RESERVED_V2: 'exec_value',
+            LOGGER_NAME_KEY_RESERVED_V2: 'logger',
             # OpenTelemetry semantic conventions (already pretty, but maintain consistency)
             'code.file.path': 'code.file.path',
             'code.line.number': 'code.line.number', 
@@ -169,6 +171,7 @@ class FallbackLogExporter(LogExporter):
             'exception.type': 'exception.type',
             'exception.message': 'exception.message',
             'exception.stacktrace': 'exception.stacktrace',
+            'logger_name': 'logger',
         }
         return pretty_names.get(attr_name, attr_name)
     

@@ -58,7 +58,9 @@ export function DataTable({
   isTailing = true,
   onTailingChange,
 }: DataTableProps) {
-  const [sorting, setSorting] = useState<SortingState>([]);
+  const [sorting, setSorting] = useState<SortingState>([
+    { id: "timestamp", desc: false } // Default to ascending (oldest first)
+  ]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
   const [globalFilter, setGlobalFilter] = useState("");
@@ -77,11 +79,11 @@ export function DataTable({
   const getColumnWidths = (fontSize: "small" | "medium" | "large") => {
     switch (fontSize) {
       case "small":
-        return { time: "w-24", level: "w-24", service: "w-28", trace: "w-16" };
+        return { time: "w-24", level: "w-24", service: "w-28", logger: "w-20", trace: "w-16" };
       case "medium":
-        return { time: "w-32", level: "w-28", service: "w-36", trace: "w-20" };
+        return { time: "w-32", level: "w-28", service: "w-36", logger: "w-24", trace: "w-20" };
       case "large":
-        return { time: "w-40", level: "w-32", service: "w-44", trace: "w-24" };
+        return { time: "w-40", level: "w-32", service: "w-44", logger: "w-28", trace: "w-24" };
     }
   };
 
@@ -183,9 +185,9 @@ export function DataTable({
   }
 
   return (
-    <div className="w-full space-y-4">
+    <div className="w-full h-full flex flex-col space-y-4">
       {/* Header with controls */}
-      <div className="flex items-center justify-between">
+      <div className="flex-shrink-0 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
             <Badge
@@ -448,10 +450,15 @@ export function DataTable({
       </div>
 
       {/* Table */}
-      <div className="rounded-md border relative">
+      <div className="flex-1 rounded-md border relative overflow-hidden">
         <div
           id="logs-table-container"
-          className="max-h-[calc(100vh-8rem)] min-h-[calc(100vh-8rem)] overflow-scroll"
+          className="h-full overflow-auto overscroll-contain"
+          style={{ 
+            WebkitOverflowScrolling: 'touch',
+            // Prevent bounce scrolling on macOS
+            overscrollBehavior: 'contain'
+          }}
         >
           <Table className="w-full border-separate border-spacing-0">
             <TableHeader>
@@ -466,7 +473,9 @@ export function DataTable({
                         ? columnWidths.level
                         : index === 2
                         ? columnWidths.service
-                        : index === 4
+                        : index === 3
+                        ? columnWidths.logger
+                        : index === 5
                         ? columnWidths.trace
                         : "";
                     return (
@@ -536,6 +545,7 @@ export function DataTable({
       <EditorSelectionModal
         open={showEditorModal}
         onSelect={handleEditorSelect}
+        onClose={() => setShowEditorModal(false)}
       />
     </div>
   );

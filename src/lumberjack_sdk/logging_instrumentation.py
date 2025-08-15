@@ -13,10 +13,11 @@ from opentelemetry.sdk._logs import LoggingHandler
 from opentelemetry import _logs as logs  # type: ignore[attr-defined]
 
 from .internal_utils.fallback_logger import sdk_logger
+from .constants import LOGGER_NAME_KEY_RESERVED_V2
 
 
 class LumberjackLoggingHandler(LoggingHandler):
-    """Custom LoggingHandler that filters out Lumberjack SDK internal logs."""
+    """Custom LoggingHandler that filters out Lumberjack SDK internal logs and adds logger name."""
     
     def filter(self, record: logging.LogRecord) -> bool:
         """Filter out logs from Lumberjack SDK itself to avoid loops."""
@@ -25,6 +26,21 @@ class LumberjackLoggingHandler(LoggingHandler):
             return False
         # Call parent filter method (LoggingHandler doesn't have a filter method, so use Handler's)
         return True
+    
+    def emit(self, record: logging.LogRecord) -> None:
+        """Emit a log record with logger name as an attribute."""
+        # Add logger name as an attribute to make it accessible in log data
+        # This ensures it appears in the attributes dictionary for filtering/display
+        
+        # Add logger name to the record's attributes
+        setattr(record, LOGGER_NAME_KEY_RESERVED_V2, record.name)
+        
+        # Also add it with a standard name for semantic conventions
+        if not hasattr(record, 'logger_name'):
+            setattr(record, 'logger_name', record.name)
+        
+        # Call parent emit method
+        super().emit(record)
 
 
 

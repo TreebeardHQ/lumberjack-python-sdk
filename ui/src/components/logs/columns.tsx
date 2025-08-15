@@ -72,7 +72,19 @@ const openInEditor = (
   }
 
   if (command) {
-    window.open(command, "_self");
+    try {
+      // Use location.href for custom URL schemes to work properly
+      window.location.href = command;
+    } catch (error) {
+      console.error("Failed to open editor:", error);
+      // Fallback: try creating a temporary link and clicking it
+      const link = document.createElement('a');
+      link.href = command;
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
   }
 };
 
@@ -136,11 +148,44 @@ export const createColumns = (
       const service = row.getValue("service") as string;
       const colorIndex = hashServiceName(service);
       return (
-        <div
-          className={`font-medium w-16 truncate ${serviceColors[colorIndex]}`}
-        >
-          {service}
-        </div>
+        <TooltipProvider delayDuration={0}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div
+                className={`font-medium w-16 truncate cursor-default ${serviceColors[colorIndex]}`}
+              >
+                {service}
+              </div>
+            </TooltipTrigger>
+            <TooltipContent className="animate-none">
+              <p>{service}</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      );
+    },
+    size: 80,
+  },
+  {
+    accessorKey: "logger",
+    header: "Logger",
+    cell: ({ row }) => {
+      const attributes = row.original.attributes as Record<string, any>;
+      const loggerName = attributes?.["logger_name"] || attributes?.["tb_rv2_logger_name"] || attributes?.["logger"] || "-";
+      
+      return (
+        <TooltipProvider delayDuration={0}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="font-mono text-xs w-20 truncate cursor-default text-purple-600">
+                {loggerName === "-" ? "-" : loggerName.split('.').pop() || loggerName}
+              </div>
+            </TooltipTrigger>
+            <TooltipContent className="animate-none">
+              <p>{loggerName}</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       );
     },
     size: 80,
