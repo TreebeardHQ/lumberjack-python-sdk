@@ -9,8 +9,9 @@ import threading
 import time
 from typing import Optional, TextIO
 
-from opentelemetry import _logs as logs
-from opentelemetry._logs import LogRecord, SeverityNumber
+from opentelemetry import _logs as logs, context
+from opentelemetry._logs import SeverityNumber
+from opentelemetry.sdk._logs import LogRecord as SDKLogRecord
 
 from .constants import SOURCE_KEY_RESERVED_V2
 from .internal_utils.fallback_logger import sdk_logger
@@ -56,10 +57,15 @@ class StdoutWriter:
                     # This will use our configured LoggerProvider if available
                     otel_logger = logs.get_logger(__name__)
                     if otel_logger:
-                        log_record = LogRecord(
-                            timestamp=int(time.time_ns()),
+                        # Create SDK LogRecord with all required fields for OTLP/GRPC exporters
+                        now_ns = int(time.time_ns())
+                        log_record = SDKLogRecord(
+                            timestamp=now_ns,
+                            observed_timestamp=now_ns,
+                            context=context.get_current(),
                             severity_number=SeverityNumber.INFO,
                             body=clean_text,
+                            resource=otel_logger.resource,  # Get resource from logger
                             attributes={SOURCE_KEY_RESERVED_V2: "print"}
                         )
                         otel_logger.emit(log_record)

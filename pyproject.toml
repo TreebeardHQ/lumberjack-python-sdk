@@ -33,6 +33,17 @@ django = [
 fastapi = [
     "opentelemetry-instrumentation-fastapi>=0.45b0",
 ]
+local-server = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.25.0",
+    "websockets>=12.0",
+    "grpcio>=1.60.0",
+    "grpcio-tools>=1.60.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.27.0",
+    "opentelemetry-proto>=1.27.0",
+    "mcp>=1.0.0",
+    "requests>=2.28.0",
+]
 web = [
     "opentelemetry-instrumentation-flask>=0.48b0",
     "opentelemetry-instrumentation-django>=0.48b0",
@@ -57,6 +68,10 @@ dev = [
     "types-requests>=2.32.0",
 ]
 
+[project.scripts]
+lumberjack = "lumberjack_sdk.local_server.cli:main"
+lumberjack-mcp = "lumberjack_sdk.local_server.mcp_server:main"
+
 [project.urls]
 "Homepage" = "https://github.com/treebeardhq/lumberjack-sdk-python"
 "Bug Tracker" = "https://github.com/treebeardhq/lumberjack-sdk-python/issues"
@@ -77,4 +92,16 @@ check_untyped_defs = true
 
 [tool.ruff]
 select = ["E", "F", "B", "I"]
-line-length = 100 
+line-length = 100
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lumberjack_sdk"]
+
+[tool.hatch.build.targets.wheel.sources]
+"src" = ""
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/lumberjack_sdk",
+    "ui",
+]

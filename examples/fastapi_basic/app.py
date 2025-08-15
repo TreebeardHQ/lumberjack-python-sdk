@@ -12,14 +12,14 @@ app = FastAPI(title="Lumberjack FastAPI Example", version="1.0.0")
 # Get Python logger for demonstration
 logger = logging.getLogger(__name__)
 
-# Initialize Lumberjack
+# Initialize Lumberjack for local development
 Lumberjack.init(
-    api_key="",  # Empty for fallback mode
     project_name="fastapi-basic-example",
-    log_to_stdout=True,  # Enable for development
+    api_key="",  # Empty string for local mode
+    local_server_enabled=True,  # Enable local server mode
+    log_to_stdout=True,  # Also show logs in terminal
     capture_python_logger=True,  # Capture FastAPI's built-in logging
-    capture_stdout=True,  # Capture print statements
-    debug_mode=True
+    debug_mode=False  # Set to True only if you need verbose SDK logging
 )
 
 # Instrument FastAPI with Lumberjack

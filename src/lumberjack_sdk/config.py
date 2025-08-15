@@ -62,6 +62,11 @@ class LumberjackConfig:
     # Internal settings
     install_signal_handlers: bool = True
     
+    # Local server settings
+    local_server_enabled: Optional[bool] = None
+    local_server_endpoint: str = "localhost:4317"
+    local_server_service_name: Optional[str] = None
+    
     # Custom exporters (for testing and custom integrations)
     custom_log_exporter: Optional[LogExporter] = None
     custom_span_exporter: Optional[SpanExporter] = None
@@ -155,6 +160,18 @@ class LumberjackConfig:
         if os.getenv('LUMBERJACK_CODE_SNIPPET_EXCLUDE_PATTERNS'):
             patterns = os.getenv('LUMBERJACK_CODE_SNIPPET_EXCLUDE_PATTERNS', '')
             self.code_snippet_exclude_patterns = [p.strip() for p in patterns.split(',') if p.strip()]
+        
+        # Local server settings
+        if self.local_server_enabled is None:
+            env_val = os.getenv('LUMBERJACK_LOCAL_SERVER_ENABLED')
+            if env_val is not None:
+                self.local_server_enabled = env_val.lower() in ('true', '1', 'yes', 'on')
+        local_server_endpoint_env = os.getenv('LUMBERJACK_LOCAL_SERVER_ENDPOINT')
+        if local_server_endpoint_env:
+            self.local_server_endpoint = local_server_endpoint_env
+        local_server_service_name_env = os.getenv('LUMBERJACK_LOCAL_SERVER_SERVICE_NAME')
+        if local_server_service_name_env:
+            self.local_server_service_name = local_server_service_name_env
     
     def _set_defaults(self) -> None:
         """Set intelligent defaults based on other settings."""
@@ -173,6 +190,15 @@ class LumberjackConfig:
         
         if self.log_to_stdout is None:
             self.log_to_stdout = self.debug_mode or self.api_key is None
+        
+        # Set default local server settings
+        if self.local_server_enabled is None:
+            # Enable local server if explicitly requested or in development mode
+            self.local_server_enabled = self.debug_mode
+        
+        # Set service name for local server
+        if self.local_server_service_name is None:
+            self.local_server_service_name = self.project_name or "default"
     
     def _validate(self) -> None:
         """Validate configuration values."""
@@ -222,6 +248,9 @@ class LumberjackConfig:
             'code_snippet_max_frames': self.code_snippet_max_frames,
             'code_snippet_exclude_patterns': self.code_snippet_exclude_patterns,
             'install_signal_handlers': self.install_signal_handlers,
+            'local_server_enabled': self.local_server_enabled,
+            'local_server_endpoint': self.local_server_endpoint,
+            'local_server_service_name': self.local_server_service_name,
             'custom_log_exporter': self.custom_log_exporter,
             'custom_span_exporter': self.custom_span_exporter,
         }
@@ -265,6 +294,14 @@ class LumberjackConfig:
     def should_log_to_stdout(self) -> bool:
         """Determine if logs should be output to stdout."""
         return bool(self.log_to_stdout)
+    
+    def should_use_local_server(self) -> bool:
+        """Determine if local server should be used for log export."""
+        return bool(self.local_server_enabled)
+    
+    def get_local_server_service_name(self) -> str:
+        """Get the service name to use for local server export."""
+        return self.local_server_service_name or self.project_name or "default"
 
 
 # Type aliases for configuration

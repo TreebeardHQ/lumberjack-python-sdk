@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Lumberjack MCP Tools
+If the Lumberjack MCP server is configured, you have access to these tools for viewing and searching logs:
+- `recent_logs(limit, service, level)` - Get recent logs with optional filters
+- `search_logs(query, service, level, trace_id, limit)` - Search logs by message or trace ID
+- `list_services()` - List all services that have sent logs with counts
+- `start_server(port, open_browser)` - Start the Lumberjack local development server
+
 ## Build & Test Commands
 - Install development dependencies: `pip install -e ".[dev]"`
 - Run all tests: `python -m pytest`

@@ -9,10 +9,15 @@ app = Flask(__name__)
 
 logger = logging.getLogger(__name__)
 
-# Initialize Lumberjack
+# Initialize Lumberjack (without local server for now to test basic functionality)
 Lumberjack.init(
-    api_key="",
-    endpoint="https://your-logging-endpoint.com/logs"
+    project_name="flask-basic-example",
+    api_key="",  # Empty for fallback mode
+    local_server_enabled=True,  # Re-enable local server to test the fix
+    log_to_stdout=True,  # Also show in terminal
+    capture_python_logger=True,  # Capture Flask's built-in logging
+    capture_stdout=True,  # Capture print statements
+    debug_mode=True  # Enable debug mode to see LogRecord debugging
 )
 
 LumberjackFlask.instrument(app)
@@ -80,6 +85,102 @@ def long_operation():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/health")
+def health_check():
+    start_time = time.time()
+    client_ip = request.remote_addr
+    user_agent = request.headers.get('User-Agent', 'Unknown')
+    
+    try:
+        Log.info("Health check initiated", 
+                client_ip=client_ip, 
+                user_agent=user_agent,
+                endpoint="/health")
+        
+        # Simulate various log levels with more detailed information
+        Log.debug("Starting comprehensive health validation", 
+                 checks=["database", "external_service", "memory", "disk_space"])
+        
+        # Check database connectivity (simulated)
+        db_check_start = time.time()
+        db_status = "healthy"
+        db_response_time = round((time.time() - db_check_start) * 1000, 2)
+        Log.info("Database connectivity verified", 
+                status=db_status, 
+                response_time_ms=db_response_time,
+                connection_pool="active")
+        
+        # Check external service (simulated)
+        service_check_start = time.time()
+        external_service_status = "operational"
+        service_response_time = round((time.time() - service_check_start) * 1000, 2)
+        Log.info("External service availability confirmed", 
+                status=external_service_status,
+                response_time_ms=service_response_time,
+                service_endpoint="api.external.com")
+        
+        # Additional system checks
+        memory_usage = "normal"  # Simulated
+        disk_space = "sufficient"  # Simulated
+        Log.debug("System resource check completed",
+                 memory_usage=memory_usage,
+                 disk_space=disk_space,
+                 cpu_load="low")
+        
+        total_duration = round((time.time() - start_time) * 1000, 2)
+        
+        if db_status == "healthy" and external_service_status == "operational":
+            Log.info("Health check completed successfully", 
+                    overall_status="healthy",
+                    total_duration_ms=total_duration,
+                    checks_passed=4,
+                    checks_failed=0)
+            return jsonify({
+                "status": "healthy",
+                "timestamp": time.time(),
+                "duration_ms": total_duration,
+                "services": {
+                    "database": {"status": db_status, "response_time_ms": db_response_time},
+                    "external_service": {"status": external_service_status, "response_time_ms": service_response_time},
+                    "memory": memory_usage,
+                    "disk": disk_space
+                }
+            })
+        else:
+            Log.warning("Health check detected system issues", 
+                       overall_status="degraded",
+                       db_status=db_status, 
+                       external_service_status=external_service_status,
+                       total_duration_ms=total_duration,
+                       requires_attention=True)
+            return jsonify({
+                "status": "degraded",
+                "timestamp": time.time(),
+                "duration_ms": total_duration,
+                "services": {
+                    "database": {"status": db_status, "response_time_ms": db_response_time},
+                    "external_service": {"status": external_service_status, "response_time_ms": service_response_time},
+                    "memory": memory_usage,
+                    "disk": disk_space
+                }
+            }), 503
+            
+    except Exception as e:
+        error_duration = round((time.time() - start_time) * 1000, 2)
+        Log.error("Health check encountered critical failure", 
+                 error=str(e),
+                 error_type=type(e).__name__,
+                 duration_ms=error_duration,
+                 client_ip=client_ip,
+                 severity="critical")
+        return jsonify({
+            "status": "error", 
+            "error": str(e),
+            "timestamp": time.time(),
+            "duration_ms": error_duration
+        }), 500
+
+
 @app.route("/error")
 def error():
 
@@ -100,4 +201,4 @@ def error():
 
 if __name__ == "__main__":
     # Configure the development server to use threading
-    app.run(debug=True, threaded=app.config['THREADING_ENABLED'])
+    app.run(debug=True, threaded=app.config['THREADING_ENABLED'], port=5000)

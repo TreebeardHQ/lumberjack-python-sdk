@@ -36,6 +36,7 @@ class FallbackLogExporter(LogExporter):
         try:
             for log_data in batch:
                 log_record = log_data.log_record
+                
                 # Get severity info - prefer text, fallback to mapping from number
                 severity_text = log_record.severity_text 
                 if not severity_text and log_record.severity_number:

@@ -12,10 +12,11 @@ import traceback
 from datetime import datetime
 from typing import Any, Dict, Mapping, Optional, Sized, cast
 from collections.abc import Mapping as ABMapping, Sequence as ABSequence
-from opentelemetry import trace
+from opentelemetry import trace, context
 
 
-from opentelemetry._logs import LogRecord, SeverityNumber  # type: ignore[attr-defined]
+from opentelemetry._logs import SeverityNumber  # type: ignore[attr-defined]
+from opentelemetry.sdk._logs import LogRecord as SDKLogRecord  # type: ignore[attr-defined]
 
 from .constants import (
     # Legacy constants for backward compatibility
@@ -76,12 +77,20 @@ def _emit_to_otel_logger(message: str, level: str, log_data: Dict[str, Any]) -> 
     attributes = {k: v for k, v in log_data.items() 
                  if k not in (MESSAGE_KEY_RESERVED_V2, 'tb_rv2_level')}
     
-    # Create LogRecord and emit through OpenTelemetry
-    log_record = LogRecord(
-        timestamp=int(time.time_ns()),
+    # Create SDK LogRecord with all required fields that OTLP/GRPC exporters expect
+    # This includes resource, dropped_attributes, context, etc.
+    now_ns = int(time.time_ns())
+    
+    log_record = SDKLogRecord(
+        timestamp=now_ns,
+        observed_timestamp=now_ns,  # When we observed/created this log
+        context=context.get_current(),  # Current OpenTelemetry context
         severity_number=severity,
         body=message,
+        resource=otel_logger.resource,  # Resource from the logger provider
         attributes=attributes
+        # Note: dropped_attributes property is automatically available due to SDK LogRecord implementation
+        # Note: trace_id, span_id, trace_flags are automatically extracted from context
     )
     otel_logger.emit(log_record)
 

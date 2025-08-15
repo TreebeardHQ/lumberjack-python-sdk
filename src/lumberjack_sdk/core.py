@@ -103,6 +103,7 @@ class Lumberjack:
     _logger_provider: Optional[LoggerProvider] = None
     _logger: Optional[Logger] = None
     _log_processor: Optional[BatchLogRecordProcessor] = None
+    _local_server_processor: Optional[BatchLogRecordProcessor] = None
     _is_shutdown: bool = False
 
     _config_version: Optional[int] = None
@@ -149,6 +150,11 @@ class Lumberjack:
         
         # Internal settings
         install_signal_handlers: Optional[bool] = None,
+        
+        # Local server settings
+        local_server_enabled: Optional[bool] = None,
+        local_server_endpoint: Optional[str] = None,
+        local_server_service_name: Optional[str] = None,
         
         # Custom exporters (for testing and custom integrations)
         custom_log_exporter: Optional[Any] = None,
@@ -323,6 +329,31 @@ class Lumberjack:
         )
         self._logger_provider.add_log_record_processor(self._log_processor)
         
+        # Add local server exporter if enabled
+        self._local_server_processor = None
+        if self._config.should_use_local_server():
+            try:
+                from .local_server.local_exporter import create_local_server_exporter, is_local_server_available
+                
+                # Check if local server is available before creating exporter
+                if is_local_server_available(f"http://{self._config.local_server_endpoint}"):
+                    local_exporter = create_local_server_exporter(
+                        endpoint=f"http://{self._config.local_server_endpoint}",
+                        service_name=self._config.get_local_server_service_name()
+                    )
+                    
+                    # Use SimpleLogRecordProcessor for immediate delivery in local development
+                    self._local_server_processor = SimpleLogRecordProcessor(local_exporter)
+                    self._logger_provider.add_log_record_processor(self._local_server_processor)
+                    sdk_logger.info(f"Local server exporter enabled for service: {self._config.get_local_server_service_name()}")
+                else:
+                    sdk_logger.debug(f"Local server not available at {self._config.local_server_endpoint}")
+                    
+            except ImportError:
+                sdk_logger.debug("Local server dependencies not installed. Install with: pip install 'lumberjack_sdk[local-server]'")
+            except Exception as e:
+                sdk_logger.warning(f"Failed to initialize local server exporter: {e}")
+        
         # Set as global provider
         logs.set_logger_provider(self._logger_provider)  # type: ignore[attr-defined]
         self._logger = logs.get_logger(__name__, __version__)  # type: ignore[attr-defined]
@@ -351,6 +382,31 @@ class Lumberjack:
         # Use SimpleLogRecordProcessor for fallback to avoid thread issues during shutdown
         self._log_processor = SimpleLogRecordProcessor(fallback_log_exporter)
         self._logger_provider.add_log_record_processor(self._log_processor)
+        
+        # Add local server exporter even in fallback mode if enabled
+        self._local_server_processor = None
+        if self._config.should_use_local_server():
+            try:
+                from .local_server.local_exporter import create_local_server_exporter, is_local_server_available
+                
+                # Check if local server is available before creating exporter
+                if is_local_server_available(f"http://{self._config.local_server_endpoint}"):
+                    local_exporter = create_local_server_exporter(
+                        endpoint=f"http://{self._config.local_server_endpoint}",
+                        service_name=self._config.get_local_server_service_name()
+                    )
+                    
+                    # Use SimpleLogRecordProcessor in fallback mode as well
+                    self._local_server_processor = SimpleLogRecordProcessor(local_exporter)
+                    self._logger_provider.add_log_record_processor(self._local_server_processor)
+                    sdk_logger.info(f"Local server exporter enabled in fallback mode for service: {self._config.get_local_server_service_name()}")
+                else:
+                    sdk_logger.debug(f"Local server not available at {self._config.local_server_endpoint}")
+                    
+            except ImportError:
+                sdk_logger.debug("Local server dependencies not installed. Install with: pip install 'lumberjack_sdk[local-server]'")
+            except Exception as e:
+                sdk_logger.warning(f"Failed to initialize local server exporter in fallback mode: {e}")
         
         # Set as global provider
         logs.set_logger_provider(self._logger_provider)  # type: ignore[attr-defined]
