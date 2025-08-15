@@ -45,3 +45,5 @@ htmlcov/
 
 # Local development
 .python-version 
+
+ui/node_modules
