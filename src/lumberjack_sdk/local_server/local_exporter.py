@@ -190,7 +190,6 @@ class LocalServerLogExporter(LogExporter):
                 fallback_logger.debug(f"Attempting to export {len(batch)} logs to server via OTLP...")
                 result = self._otlp_exporter.export(batch)
                 if result == LogExportResult.SUCCESS:
-                    fallback_logger.info(f"✅ Successfully exported {len(batch)} logs to server")
                     
                     # Successful export, try to flush cache
                     self._flush_cache()

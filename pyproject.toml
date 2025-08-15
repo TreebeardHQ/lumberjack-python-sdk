@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lumberjack_sdk"
-version = "2.0.0"
+version = "2.0.0dev0"
 authors = [
     { name = "George Mayer", email = "george@treebeardhq.com" },
 ]
@@ -66,6 +66,7 @@ dev = [
     "opentelemetry-instrumentation-django>=0.48b0",
     "opentelemetry-instrumentation-fastapi>=0.45b0",
     "types-requests>=2.32.0",
+    "lumberjack-sdk[local-server]",
 ]
 
 [project.scripts]
