@@ -29,6 +29,15 @@ from .trace_helpers import (
     start_span_with_remote_parent,
 )
 from .version import __version__
+from .metrics import (
+    MetricsAPI,
+    REDMetrics,
+    get_meter,
+    create_counter,
+    create_histogram,
+    create_up_down_counter,
+    create_red_metrics,
+)
 
 __all__ = [
     "Lumberjack", "Log",
@@ -37,5 +46,8 @@ __all__ = [
     "record_exception_on_span", "SpanKind", "SpanStatus", "SpanStatusCode",
     "extract_trace_context", "get_span_context_from_headers", "inject_trace_context", 
     "start_span_with_remote_parent", "parse_traceparent", "establish_trace_context",
-    "__version__"
+    "__version__",
+    # Metrics exports
+    "MetricsAPI", "REDMetrics", "get_meter", "create_counter", "create_histogram",
+    "create_up_down_counter", "create_red_metrics",
 ]

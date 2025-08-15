@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 Lumberjack.init(
     project_name="flask-basic-example",
     api_key="",  # Empty for fallback mode
-    local_server_enabled=True,  # Re-enable local server to test the fix
+    local_server_enabled=True,
     log_to_stdout=True,  # Also show in terminal
     capture_python_logger=True,  # Capture Flask's built-in logging
     capture_stdout=True,  # Capture print statements

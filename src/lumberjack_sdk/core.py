@@ -9,16 +9,21 @@ import sys
 import threading
 import time
 import types
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional
 
 from opentelemetry import _logs as logs  # type: ignore[attr-defined]
 from opentelemetry import trace
+from opentelemetry import metrics
 from opentelemetry._logs import Logger   # type: ignore[attr-defined]
 from opentelemetry.sdk._logs import LoggerProvider  # type: ignore[attr-defined]
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, SimpleLogRecordProcessor  # type: ignore[attr-defined]
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+
+
 
 
 from lumberjack_sdk.internal_utils.flush_timer import  FlushTimerWorker
@@ -101,9 +106,11 @@ class Lumberjack:
     _flush_timer: Optional[FlushTimerWorker] = None
     _tracer_provider: Optional[TracerProvider] = None
     _logger_provider: Optional[LoggerProvider] = None
+    _meter_provider: Optional[MeterProvider] = None
     _logger: Optional[Logger] = None
     _log_processor: Optional[BatchLogRecordProcessor] = None
     _local_server_processor: Optional[BatchLogRecordProcessor] = None
+    _metrics_reader: Optional[PeriodicExportingMetricReader] = None
     _is_shutdown: bool = False
 
     _config_version: Optional[int] = None
@@ -123,6 +130,7 @@ class Lumberjack:
         endpoint: Optional[str] = None,
         objects_endpoint: Optional[str] = None,
         spans_endpoint: Optional[str] = None,
+        metrics_endpoint: Optional[str] = None,
         env: Optional[str] = None,
         
         # Batching settings
@@ -159,6 +167,7 @@ class Lumberjack:
         # Custom exporters (for testing and custom integrations)
         custom_log_exporter: Optional[Any] = None,
         custom_span_exporter: Optional[Any] = None,
+        custom_metrics_exporter: Optional[Any] = None,
     ):
         """
         Initialize the Lumberjack class.
@@ -267,7 +276,7 @@ class Lumberjack:
             import sys
             if hasattr(sys, '_getframe'):  # Check if interpreter is still fully operational
                 self.shutdown()
-        except Exception as e:
+        except Exception as _e:
             # Ignore errors during shutdown - interpreter might be in shutdown state
             pass
 
@@ -305,6 +314,55 @@ class Lumberjack:
         
         # Set as global provider
         trace.set_tracer_provider(self._tracer_provider)
+        
+        # Initialize MeterProvider
+        try:
+            from .metrics_exporter import LumberjackMetricsExporter, create_metrics_reader
+        except ImportError:
+            sdk_logger.debug("Metrics exporter not available")
+            LumberjackMetricsExporter = None
+            create_metrics_reader = None
+        
+        # Create and add metrics exporter (use custom if provided)
+        self._metrics_exporter = None  # Initialize the attribute
+        self._metrics_reader = None   # Initialize the attribute
+        
+        if self._config.custom_metrics_exporter:
+            self._metrics_exporter = self._config.custom_metrics_exporter
+        else:
+            # Only create metrics exporter if metrics_endpoint is configured and available
+            if self._config.metrics_endpoint and LumberjackMetricsExporter:
+                try:
+                    metrics_exporter_wrapper = LumberjackMetricsExporter(
+                        api_key=self._config.api_key or "",
+                        endpoint=self._config.metrics_endpoint,
+                        project_name=self._config.project_name,
+                        config_version=self._config_version,
+                        update_callback=self.update_project_config
+                    )
+                    self._metrics_exporter = metrics_exporter_wrapper.get_exporter()
+                except Exception as e:
+                    sdk_logger.warning(f"Failed to create metrics exporter: {e}")
+                    self._metrics_exporter = None
+        
+        # Create metric readers list
+        metric_readers = []
+        if self._metrics_exporter and create_metrics_reader:
+            self._metrics_reader = create_metrics_reader(
+                self._metrics_exporter,
+                export_interval_millis=30000,  # Export every 30 seconds (faster for development)
+                export_timeout_millis=10000    # 10 second timeout
+            )
+            metric_readers.append(self._metrics_reader)
+        
+        # Create MeterProvider with readers
+        self._meter_provider = MeterProvider(
+            resource=resource,
+            metric_readers=metric_readers
+        )
+        
+        # Set as global provider
+        metrics.set_meter_provider(self._meter_provider)
 
         # Initialize LoggerProvider
         self._logger_provider = LoggerProvider(resource=resource)
@@ -374,6 +432,35 @@ class Lumberjack:
         
         # Set as global provider (but don't add any processors - no span output)
         trace.set_tracer_provider(self._tracer_provider)
+        
+        # Initialize MeterProvider - check for custom exporter even in fallback mode
+        try:
+            from .metrics_exporter import create_metrics_reader
+        except ImportError:
+            create_metrics_reader = None
+        
+        # Create and add metrics exporter (use custom if provided)
+        self._metrics_exporter = None  # Initialize the attribute
+        self._metrics_reader = None   # Initialize the attribute
+        metric_readers = []
+        
+        if self._config.custom_metrics_exporter and create_metrics_reader:
+            self._metrics_exporter = self._config.custom_metrics_exporter
+            self._metrics_reader = create_metrics_reader(
+                self._metrics_exporter,
+                export_interval_millis=30000,  # Consistent with normal mode
+                export_timeout_millis=10000
+            )
+            metric_readers.append(self._metrics_reader)
+        
+        # Create MeterProvider with readers (empty list if no custom exporter)
+        self._meter_provider = MeterProvider(
+            resource=resource,
+            metric_readers=metric_readers
+        )
+        
+        # Set as global provider
+        metrics.set_meter_provider(self._meter_provider)
 
         # Initialize LoggerProvider with fallback exporter
         self._logger_provider = LoggerProvider(resource=resource)
@@ -447,6 +534,12 @@ class Lumberjack:
             try:
                 if hasattr(self, '_logger_provider') and self._logger_provider:
                     self._logger_provider.shutdown()
+            except Exception:
+                pass  # Ignore errors during shutdown
+            
+            try:
+                if hasattr(self, '_meter_provider') and self._meter_provider:
+                    self._meter_provider.shutdown()
             except Exception:
                 pass  # Ignore errors during shutdown
 
@@ -708,3 +801,8 @@ class Lumberjack:
     def logger(self) -> Optional[Logger]:
         """Get the OpenTelemetry logger instance."""
         return self._logger
+    
+    @property
+    def meter(self) -> Optional[metrics.Meter]:
+        """Get the OpenTelemetry meter instance."""
+        return metrics.get_meter(__name__, __version__) if self._meter_provider else None

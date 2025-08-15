@@ -104,3 +104,7 @@ Lumberjack is thread-safe and supports different threading modes:
 ## License
 
 MIT License - see LICENSE file for details.
+
+## Coming soon
+
+1. Begin tailing your production logs in your log viewer

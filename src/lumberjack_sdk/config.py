@@ -12,9 +12,11 @@ from typing import Any, Dict, List, Optional, Union
 try:
     from opentelemetry.sdk._logs.export import LogExporter
     from opentelemetry.sdk.trace.export import SpanExporter
+    from opentelemetry.sdk.metrics.export import MetricExporter
 except ImportError:
     LogExporter = Any  # type: ignore[misc,assignment]
     SpanExporter = Any  # type: ignore[misc,assignment]
+    MetricExporter = Any  # type: ignore[misc,assignment]
 
 
 @dataclass
@@ -32,6 +34,7 @@ class LumberjackConfig:
     endpoint: str = "https://api.trylumberjack.com/logs/batch"
     objects_endpoint: Optional[str] = None
     spans_endpoint: Optional[str] = None
+    metrics_endpoint: Optional[str] = None
     env: str = "production"
     
     # Batching settings
@@ -70,6 +73,7 @@ class LumberjackConfig:
     # Custom exporters (for testing and custom integrations)
     custom_log_exporter: Optional[LogExporter] = None
     custom_span_exporter: Optional[SpanExporter] = None
+    custom_metrics_exporter: Optional[MetricExporter] = None
     
     def __post_init__(self) -> None:
         """Validate and normalize configuration after initialization."""
