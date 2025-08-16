@@ -93,6 +93,34 @@ export const createColumns = (
   onEditorNeeded?: () => void
 ): ColumnDef<LogEntry>[] => [
   {
+    accessorKey: "service",
+    header: "Service",
+    filterFn: (row, id, value) => {
+      return !value || value.includes(row.getValue(id));
+    },
+    cell: ({ row }) => {
+      const service = row.getValue("service") as string;
+      const colorIndex = hashServiceName(service);
+      return (
+        <TooltipProvider delayDuration={0}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div
+                className={`font-medium truncate cursor-default ${serviceColors[colorIndex]}`}
+              >
+                {service}
+              </div>
+            </TooltipTrigger>
+            <TooltipContent className="animate-none">
+              <p>{service}</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      );
+    },
+    size: 80,
+  },
+  {
     accessorKey: "timestamp",
     header: ({ column }) => {
       return (
@@ -110,7 +138,7 @@ export const createColumns = (
       const timestamp = row.getValue("timestamp") as number;
       const date = new Date(timestamp / 1000000); // Convert from nanoseconds
       return (
-        <div className="font-mono text-muted-foreground w-16">
+        <div className="text-muted-foreground">
           {format(date, "HH:mm:ss.SSS")}
         </div>
       );
@@ -128,7 +156,7 @@ export const createColumns = (
       const normalizedLevel = level.toUpperCase() as keyof typeof levelColors;
       return (
         <div
-          className={`font-medium w-12 ${
+          className={`font-medium ${
             levelColors[normalizedLevel] || levelColors.INFO
           }`}
         >
@@ -137,34 +165,6 @@ export const createColumns = (
       );
     },
     size: 60,
-  },
-  {
-    accessorKey: "service",
-    header: "Service",
-    filterFn: (row, id, value) => {
-      return !value || value.includes(row.getValue(id));
-    },
-    cell: ({ row }) => {
-      const service = row.getValue("service") as string;
-      const colorIndex = hashServiceName(service);
-      return (
-        <TooltipProvider delayDuration={0}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div
-                className={`font-medium w-16 truncate cursor-default ${serviceColors[colorIndex]}`}
-              >
-                {service}
-              </div>
-            </TooltipTrigger>
-            <TooltipContent className="animate-none">
-              <p>{service}</p>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-      );
-    },
-    size: 80,
   },
   {
     accessorKey: "logger",
@@ -177,7 +177,7 @@ export const createColumns = (
         <TooltipProvider delayDuration={0}>
           <Tooltip>
             <TooltipTrigger asChild>
-              <div className="font-mono text-xs w-20 truncate cursor-default text-purple-600">
+              <div className="text-xs truncate cursor-default text-purple-600">
                 {loggerName === "-" ? "-" : loggerName.split('.').pop() || loggerName}
               </div>
             </TooltipTrigger>
@@ -188,7 +188,7 @@ export const createColumns = (
         </TooltipProvider>
       );
     },
-    size: 80,
+    size: 56,
   },
   {
     accessorKey: "message",
@@ -228,7 +228,7 @@ export const createColumns = (
             <Popover>
               <PopoverTrigger asChild>
                 <div
-                  className={`break-words cursor-pointer flex-1 ${
+                  className={`break-all cursor-pointer flex-1 ${
                     hasAttributes ? "hover:bg-muted/50 rounded px-1 py-0.5" : ""
                   }`}
                 >
@@ -306,7 +306,7 @@ export const createColumns = (
         </div>
       );
     },
-    size: 600,
+    // Remove fixed size to allow flexible width
   },
   {
     accessorKey: "trace_id",
@@ -322,7 +322,7 @@ export const createColumns = (
           onClick={() => {
             table.setGlobalFilter(traceId);
           }}
-          className="font-mono text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
+          className="text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
           title={`Click to search for trace: ${traceId}`}
         >
           {shortTrace}

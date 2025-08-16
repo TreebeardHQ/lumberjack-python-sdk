@@ -340,6 +340,24 @@ def claude_init_command(args: argparse.Namespace) -> None:
                 print("⚠️  MCP server added but not yet connected.")
                 print("You may need to restart Claude Code or start a new session.")
         
+        # Prompt user to run install
+        print("\n🔧 Would you like to instrument your application with Lumberjack SDK? [Y/n]: ", end="", flush=True)
+        try:
+            response = input().strip().lower()
+            if response == '' or response in ('y', 'yes'):
+                print("\n📝 Running 'lumberjack claude install' to instrument your application...")
+                # Create a new namespace for the install command
+                install_args = argparse.Namespace()
+                install_args.dry_run = False
+                install_args.verbose = args.verbose
+                claude_install_command(install_args)
+            else:
+                print("\n📋 Setup complete! When you're ready to instrument your app, run:")
+                print("   lumberjack claude install")
+        except (KeyboardInterrupt, EOFError):
+            print("\n📋 Setup complete! When you're ready to instrument your app, run:")
+            print("   lumberjack claude install")
+        
         print("\n📋 Next steps:")
         print("1. Start the local server: lumberjack serve")
         print("2. Use Claude Code to interact with your logs!")
