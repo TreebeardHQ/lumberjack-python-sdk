@@ -288,7 +288,7 @@ export function DataTable({
     <TooltipProvider delayDuration={0}>
       <div className="w-full h-full flex flex-col space-y-4">
         {/* Header with controls */}
-        <div className="flex-shrink-0 flex items-center justify-between">
+        <div className="flex-shrink-0 flex items-center justify-between pt-2">
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
               <Badge

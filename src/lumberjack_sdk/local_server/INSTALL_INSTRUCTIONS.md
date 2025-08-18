@@ -54,27 +54,47 @@ Search the codebase to determine which framework is being used:
 
 ## Step 3: Add the SDK to Dependencies
 
-Find the appropriate dependency file and add the Lumberjack SDK with the correct extras based on the framework:
+**Important:** The `local-server` extra is only for development. Add dependencies as follows:
 
-**For Flask applications:**
-- If `requirements.txt` exists, add: `lumberjack-sdk[local-server,flask]`
-- If `pyproject.toml` exists: `"lumberjack-sdk[local-server,flask]"`
-- If `setup.py` exists: `'lumberjack-sdk[local-server,flask]'`
+### For Production Dependencies (without local-server):
 
-**For FastAPI applications:**
-- If `requirements.txt` exists, add: `lumberjack-sdk[local-server,fastapi]`
-- If `pyproject.toml` exists: `"lumberjack-sdk[local-server,fastapi]"`
-- If `setup.py` exists: `'lumberjack-sdk[local-server,fastapi]'`
+**Flask applications:**
+- If `requirements.txt` exists, add: `lumberjack-sdk[flask]`
+- If `pyproject.toml` exists, add to `dependencies`: `"lumberjack-sdk[flask]"`
 
-**For Django applications:**
-- If `requirements.txt` exists, add: `lumberjack-sdk[local-server,django]`
-- If `pyproject.toml` exists: `"lumberjack-sdk[local-server,django]"`
-- If `setup.py` exists: `'lumberjack-sdk[local-server,django]'`
+**FastAPI applications:**
+- If `requirements.txt` exists, add: `lumberjack-sdk[fastapi]`
+- If `pyproject.toml` exists, add to `dependencies`: `"lumberjack-sdk[fastapi]"`
 
-**For standalone Python applications:**
-- If `requirements.txt` exists, add: `lumberjack-sdk[local-server]`
-- If `pyproject.toml` exists: `"lumberjack-sdk[local-server]"`
-- If `setup.py` exists: `'lumberjack-sdk[local-server]'`
+**Django applications:**
+- If `requirements.txt` exists, add: `lumberjack-sdk[django]`
+- If `pyproject.toml` exists, add to `dependencies`: `"lumberjack-sdk[django]"`
+
+**Standalone Python applications:**
+- If `requirements.txt` exists, add: `lumberjack-sdk`
+- If `pyproject.toml` exists, add to `dependencies`: `"lumberjack-sdk"`
+
+### For Development Dependencies (with local-server):
+
+Add to development/optional dependencies:
+
+**If using `requirements-dev.txt`:**
+- Flask: `lumberjack-sdk[local-server,flask]`
+- FastAPI: `lumberjack-sdk[local-server,fastapi]`
+- Django: `lumberjack-sdk[local-server,django]`
+- Standalone: `lumberjack-sdk[local-server]`
+
+**If using `pyproject.toml` with optional dependencies:**
+```toml
+[project.optional-dependencies]
+dev = [
+    "lumberjack-sdk[local-server,flask]",  # or fastapi/django as appropriate
+    # ... other dev dependencies
+]
+```
+
+**If the project doesn't have separate dev dependencies:**
+- Add to main requirements with comment: `lumberjack-sdk[local-server,flask]  # local-server only needed for development`
 
 ## Step 4: Add the Initialization Code
 
@@ -119,6 +139,29 @@ Lumberjack.init(
 # Instrument FastAPI app
 LumberjackFastAPI.instrument(app)
 ```
+
+**⚠️ Important for FastAPI with pydantic-settings:**
+
+If your FastAPI app uses `pydantic-settings` with strict validation (common pattern), you need to handle the Lumberjack environment variables in your Settings class to avoid validation errors:
+
+```python
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    # Your existing settings...
+    
+    # Add these to prevent validation errors when LUMBERJACK_* vars are in .env
+    lumberjack_local_server_enabled: bool = False
+    lumberjack_local_server_endpoint: str = "localhost:4317"
+    lumberjack_local_server_service_name: str = "my-service"
+    
+    class Config:
+        env_file = ".env"
+        # If using extra="forbid", you MUST define the LUMBERJACK_* fields above
+        # extra = "forbid"  
+```
+
+Alternatively, if you don't want to define these in your Settings class, use `extra="ignore"` in your Config to allow unknown environment variables.
 
 ### For Django Applications
 
@@ -215,23 +258,24 @@ The SDK automatically captures trace context for distributed tracing when availa
 1. **Check for existing Lumberjack usage** first - if found, ONLY ensure `LUMBERJACK_LOCAL_SERVER_ENABLED=true` environment variable is set
 2. **If no existing Lumberjack**, detect the framework by searching the codebase
 3. **Add the dependency** with the correct extras:
-   - Flask: `lumberjack-sdk[local-server,flask]`
-   - FastAPI: `lumberjack-sdk[local-server,fastapi]`
-   - Django: `lumberjack-sdk[local-server,django]`
-   - Standalone: `lumberjack-sdk[local-server]`
+   - **Production deps**: `lumberjack-sdk[flask]` (or fastapi/django)
+   - **Dev deps**: `lumberjack-sdk[local-server,flask]` (or fastapi/django)
+   - Prefer adding `local-server` to dev dependencies when possible
 4. **Add the initialization code** to the main application file with:
    - Only `project_name` parameter (REQUIRED)
    - Set `LUMBERJACK_LOCAL_SERVER_ENABLED=true` environment variable
 5. **For web frameworks**: Also add the instrumentation call (LumberjackFlask.instrument(app), etc.)
-6. **RESPECT existing settings** - do not modify existing configuration except for adding the environment variable
+6. **For FastAPI with pydantic-settings**: Handle LUMBERJACK_* env vars in Settings class
+7. **RESPECT existing settings** - do not modify existing configuration except for adding the environment variable
 
 ## Expected Changes
 
 You should make 2-4 file changes:
-1. Add the SDK to the dependency file (requirements.txt, pyproject.toml, or setup.py)
+1. Add the SDK to the dependency file (preferably dev dependencies for local-server)
 2. Add initialization code to the main application file
 3. For web frameworks: Add instrumentation call
 4. For Django only: Also update settings.py and apps.py
+5. For FastAPI with strict settings: Update Settings class
 
 ## Verification
 
