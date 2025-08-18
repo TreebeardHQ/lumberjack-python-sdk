@@ -405,8 +405,8 @@ class Lumberjack:
                 self._logger_provider.add_log_record_processor(self._local_server_processor)
                 sdk_logger.info(f"Local server exporter enabled with service discovery for service: {self._config.get_local_server_service_name()}")
                     
-            except ImportError:
-                sdk_logger.debug("Local server dependencies not installed. Install with: pip install 'lumberjack_sdk[local-server]'")
+            except ImportError as ie:
+                sdk_logger.debug("Local server dependencies not installed. Install with: pip install 'lumberjack_sdk[local-server]'", exc_info=ie)
             except Exception as e:
                 sdk_logger.warning(f"Failed to initialize local server exporter: {e}")
         
@@ -486,8 +486,8 @@ class Lumberjack:
                 self._logger_provider.add_log_record_processor(self._local_server_processor)
                 sdk_logger.info(f"Local server exporter enabled in fallback mode with service discovery for service: {self._config.get_local_server_service_name()}")
                     
-            except ImportError:
-                sdk_logger.debug("Local server dependencies not installed. Install with: pip install 'lumberjack_sdk[local-server]'")
+            except ImportError as ie:
+                sdk_logger.debug("Local server dependencies not installed. Install with: pip install 'lumberjack_sdk[local-server]'", exc_info=ie)
             except Exception as e:
                 sdk_logger.warning(f"Failed to initialize local server exporter in fallback mode: {e}")
         

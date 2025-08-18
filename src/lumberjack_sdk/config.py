@@ -94,7 +94,7 @@ class LumberjackConfig:
             self.api_key = os.getenv('LUMBERJACK_API_KEY')
         if self.project_name is None:
             self.project_name = os.getenv('LUMBERJACK_PROJECT_NAME')
-        endpoint_env = os.getenv('LUMBERJACK_ENDPOINT')
+        endpoint_env = os.getenv('LUMBERJACK_API_URL')
         if endpoint_env:
             self.endpoint = endpoint_env
         env_var = os.getenv('LUMBERJACK_ENV')

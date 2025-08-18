@@ -81,13 +81,20 @@ def _emit_to_otel_logger(message: str, level: str, log_data: Dict[str, Any]) -> 
     # This includes resource, dropped_attributes, context, etc.
     now_ns = int(time.time_ns())
     
+    # Get resource from the logger provider
+    from opentelemetry import _logs
+    logger_provider = _logs.get_logger_provider()
+    resource = None
+    if hasattr(logger_provider, '_resource'):
+        resource = logger_provider._resource
+    
     log_record = SDKLogRecord(
         timestamp=now_ns,
         observed_timestamp=now_ns,  # When we observed/created this log
         context=context.get_current(),  # Current OpenTelemetry context
         severity_number=severity,
         body=message,
-        resource=otel_logger.resource,  # Resource from the logger provider
+        resource=resource,  # Resource from the logger provider
         attributes=attributes
         # Note: dropped_attributes property is automatically available due to SDK LogRecord implementation
         # Note: trace_id, span_id, trace_flags are automatically extracted from context

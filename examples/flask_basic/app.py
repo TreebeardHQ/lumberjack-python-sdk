@@ -3,6 +3,7 @@ import time
 import utils
 from flask import Flask, jsonify, request
 from lumberjack_sdk import Log, Lumberjack, LumberjackFlask
+from lumberjack_sdk.traceparent_api import get_current_traceparent, get_trace_context_info
 import logging
 
 app = Flask(__name__)
@@ -196,6 +197,49 @@ def error():
     except Exception as e:
         logger.error("unknown error", exc_info=e)
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/traceparent")
+def get_traceparent():
+    """
+    Get the current W3C traceparent from the active span.
+    
+    This endpoint demonstrates the traceparent API functionality.
+    """
+    try:
+        Log.info("Fetching current traceparent")
+        
+        # Get the simple traceparent string
+        traceparent = get_current_traceparent()
+        
+        # Get detailed trace context information
+        trace_info = get_trace_context_info()
+        
+        if traceparent:
+            Log.info("Traceparent retrieved successfully", 
+                    traceparent=traceparent,
+                    trace_id=trace_info['trace_id'] if trace_info else None)
+            
+            return jsonify({
+                "traceparent": traceparent,
+                "trace_context": trace_info,
+                "status": "success"
+            })
+        else:
+            Log.warning("No active span found for traceparent")
+            return jsonify({
+                "traceparent": None,
+                "trace_context": None,
+                "status": "no_active_span",
+                "message": "No active span found. Ensure tracing is enabled."
+            })
+    
+    except Exception as e:
+        Log.error("Error retrieving traceparent", error=str(e))
+        return jsonify({
+            "error": str(e),
+            "status": "error"
+        }), 500
 
 
 

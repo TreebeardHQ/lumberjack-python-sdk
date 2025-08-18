@@ -5,6 +5,7 @@ from typing import Dict, Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from lumberjack_sdk import Log, Lumberjack, LumberjackFastAPI
+from lumberjack_sdk.traceparent_api import get_current_traceparent, get_trace_context_info
 
 # Initialize FastAPI app
 app = FastAPI(title="Lumberjack FastAPI Example", version="1.0.0")
@@ -158,6 +159,49 @@ async def logging_demo(request: Request) -> Dict[str, Any]:
         "fastapi_logger": "Standard Python logging forwarded to Lumberjack",
         "print_statements": "Print statements captured if stdout capture enabled"
     }
+
+
+@app.get("/traceparent")
+async def get_traceparent_endpoint() -> Dict[str, Any]:
+    """
+    Get the current W3C traceparent from the active span.
+    
+    This endpoint demonstrates the traceparent API functionality in FastAPI.
+    """
+    try:
+        Log.info("Fetching current traceparent")
+        
+        # Get the simple traceparent string
+        traceparent = get_current_traceparent()
+        
+        # Get detailed trace context information
+        trace_info = get_trace_context_info()
+        
+        if traceparent:
+            Log.info("Traceparent retrieved successfully", 
+                    traceparent=traceparent,
+                    trace_id=trace_info['trace_id'] if trace_info else None)
+            
+            return {
+                "traceparent": traceparent,
+                "trace_context": trace_info,
+                "status": "success"
+            }
+        else:
+            Log.warning("No active span found for traceparent")
+            return {
+                "traceparent": None,
+                "trace_context": None,
+                "status": "no_active_span",
+                "message": "No active span found. Ensure tracing is enabled."
+            }
+    
+    except Exception as e:
+        Log.error("Error retrieving traceparent", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail={"error": str(e), "status": "error"}
+        )
 
 
 @app.exception_handler(Exception)

@@ -314,7 +314,13 @@ class LumberjackLogExporter(LogExporter):
             if log_record.attributes:
                 # Look for standard fields
                 formatted_log[COMPACT_FILE_KEY] = log_record.attributes.get("code.filepath", "")
-                formatted_log[COMPACT_LINE_KEY] = log_record.attributes.get("code.lineno", "")
+                # Line number must be an integer or omitted
+                line_no = log_record.attributes.get("code.lineno")
+                if line_no is not None and line_no != "":
+                    try:
+                        formatted_log[COMPACT_LINE_KEY] = int(line_no)
+                    except (ValueError, TypeError):
+                        pass  # Don't include line number if it can't be converted to int
                 formatted_log[COMPACT_FUNCTION_KEY] = log_record.attributes.get("code.function", "")
                 
                 # Exception info
