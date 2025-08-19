@@ -142,7 +142,7 @@ LumberjackFastAPI.instrument(app)
 
 **⚠️ Important for FastAPI with pydantic-settings:**
 
-If your FastAPI app uses `pydantic-settings` with strict validation (common pattern), you need to handle the Lumberjack environment variables in your Settings class to avoid validation errors:
+FastAPI apps commonly use `pydantic-settings` for configuration management. To prevent validation errors when setting `LUMBERJACK_LOCAL_SERVER_ENABLED=true` in your `.env` file, you MUST update your Settings class:
 
 ```python
 from pydantic_settings import BaseSettings
@@ -150,18 +150,19 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     # Your existing settings...
     
-    # Add these to prevent validation errors when LUMBERJACK_* vars are in .env
+    # Add these Lumberjack settings to prevent validation errors
+    # The field names must match the env var names (lowercase with underscores)
     lumberjack_local_server_enabled: bool = False
     lumberjack_local_server_endpoint: str = "localhost:4317"
     lumberjack_local_server_service_name: str = "my-service"
     
     class Config:
         env_file = ".env"
-        # If using extra="forbid", you MUST define the LUMBERJACK_* fields above
-        # extra = "forbid"  
+        # Note: Even without explicit extra="forbid", pydantic-settings 
+        # may enforce validation, so always add the fields above
 ```
 
-Alternatively, if you don't want to define these in your Settings class, use `extra="ignore"` in your Config to allow unknown environment variables.
+**Why this is necessary:** Pydantic-settings validates environment variables against your Settings class fields. Without these fields defined, you'll get validation errors when the `LUMBERJACK_*` environment variables are present in your `.env` file.
 
 ### For Django Applications
 
@@ -265,17 +266,17 @@ The SDK automatically captures trace context for distributed tracing when availa
    - Only `project_name` parameter (REQUIRED)
    - Set `LUMBERJACK_LOCAL_SERVER_ENABLED=true` environment variable
 5. **For web frameworks**: Also add the instrumentation call (LumberjackFlask.instrument(app), etc.)
-6. **For FastAPI with pydantic-settings**: Handle LUMBERJACK_* env vars in Settings class
+6. **For FastAPI**: ALWAYS update Settings class to include LUMBERJACK_* fields (even without explicit extra="forbid")
 7. **RESPECT existing settings** - do not modify existing configuration except for adding the environment variable
 
 ## Expected Changes
 
-You should make 2-4 file changes:
+You should make 2-5 file changes:
 1. Add the SDK to the dependency file (preferably dev dependencies for local-server)
 2. Add initialization code to the main application file
 3. For web frameworks: Add instrumentation call
 4. For Django only: Also update settings.py and apps.py
-5. For FastAPI with strict settings: Update Settings class
+5. For FastAPI: ALWAYS update Settings class to add LUMBERJACK_* fields
 
 ## Verification
 

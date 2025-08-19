@@ -170,10 +170,76 @@ class Lumberjack:
         custom_metrics_exporter: Optional[Any] = None,
     ):
         """
-        Initialize the Lumberjack class.
+        Initialize the Lumberjack observability SDK.
 
-        All configuration options can be passed as keyword arguments.
-        See LumberjackConfig for full documentation of available options.
+        Args:
+            # Core settings
+            project_name: Name of your project/application. Required for identification.
+            api_key: Your Lumberjack API key. If None, uses fallback mode or local server.
+            endpoint: Custom API endpoint for logs. Defaults to Lumberjack's API.
+            objects_endpoint: Custom endpoint for object tracking.
+            spans_endpoint: Custom endpoint for distributed tracing spans.
+            metrics_endpoint: Custom endpoint for metrics data.
+            env: Environment name (e.g., 'production', 'staging', 'development').
+            
+            # Batching settings
+            batch_size: Maximum number of items in a batch before sending. Default: 500.
+            batch_age: Maximum time (seconds) to wait before sending a batch. Default: 30.0.
+            flush_interval: Interval (seconds) for flushing pending data. Default: 30.0.
+            
+            # Output settings
+            log_to_stdout: Whether to also log to console. Default: False.
+            stdout_log_level: Log level for console output ('DEBUG', 'INFO', etc.).
+            debug_mode: Enable verbose SDK debug logging. Default: False.
+            otel_format: Use OpenTelemetry format for console output. Default: False.
+            
+            # Capture settings
+            capture_stdout: Capture print statements as logs. Default: False.
+            capture_python_logger: Forward Python logging to Lumberjack. Default: False.
+            python_logger_level: Minimum level for captured Python logs. Default: 'INFO'.
+            python_logger_name: Specific logger name to capture. If None, captures all.
+            
+            # Code snippet settings
+            code_snippet_enabled: Include code context in error logs. Default: True.
+            code_snippet_context_lines: Lines of code context to include. Default: 5.
+            code_snippet_max_frames: Maximum stack frames to process. Default: 20.
+            code_snippet_exclude_patterns: File patterns to exclude from snippets.
+            
+            # Internal settings
+            install_signal_handlers: Auto-install graceful shutdown handlers. Default: True.
+            
+            # Local server settings (for development)
+            local_server_enabled: Enable local development server mode. Default: False.
+            local_server_endpoint: Local server endpoint. Default: 'localhost:4317'.
+            local_server_service_name: Service name for local server. Defaults to project_name.
+            
+            # Custom exporters (advanced usage)
+            custom_log_exporter: Custom log exporter instance for testing.
+            custom_span_exporter: Custom span exporter instance for testing.
+            custom_metrics_exporter: Custom metrics exporter instance for testing.
+            
+        Example:
+            >>> from lumberjack_sdk import Lumberjack
+            >>> 
+            >>> # Basic setup for production
+            >>> Lumberjack.init(
+            ...     project_name="my-app",
+            ...     api_key="your-api-key",
+            ...     env="production"
+            ... )
+            >>> 
+            >>> # Development setup with local server
+            >>> Lumberjack.init(
+            ...     project_name="my-app",
+            ...     local_server_enabled=True,
+            ...     debug_mode=True,
+            ...     log_to_stdout=True
+            ... )
+            
+        Note:
+            This class is a singleton. Multiple calls to init() will reinitialize
+            the same instance. Use environment variables (LUMBERJACK_*) to override
+            settings without code changes.
         """
         # Handle reinitialization logic
         if project_name is not None and Lumberjack._initialized:
@@ -564,9 +630,78 @@ class Lumberjack:
     @classmethod
     def init(cls, **kwargs: Any) -> None:
         """
-        Initialize the Lumberjack class.
+        Initialize the Lumberjack observability SDK.
 
-        @see Lumberjack.__init__
+        Args:
+            **kwargs: All configuration options as keyword arguments:
+            
+            # Core settings
+            project_name: Name of your project/application. Required for identification.
+            api_key: Your Lumberjack API key. If None, uses fallback mode or local server.
+            endpoint: Custom API endpoint for logs. Defaults to Lumberjack's API.
+            objects_endpoint: Custom endpoint for object tracking.
+            spans_endpoint: Custom endpoint for distributed tracing spans.
+            metrics_endpoint: Custom endpoint for metrics data.
+            env: Environment name (e.g., 'production', 'staging', 'development').
+            
+            # Batching settings
+            batch_size: Maximum number of items in a batch before sending. Default: 500.
+            batch_age: Maximum time (seconds) to wait before sending a batch. Default: 30.0.
+            flush_interval: Interval (seconds) for flushing pending data. Default: 30.0.
+            
+            # Output settings
+            log_to_stdout: Whether to also log to console. Default: False.
+            stdout_log_level: Log level for console output ('DEBUG', 'INFO', etc.).
+            debug_mode: Enable verbose SDK debug logging. Default: False.
+            otel_format: Use OpenTelemetry format for console output. Default: False.
+            
+            # Capture settings
+            capture_stdout: Capture print statements as logs. Default: False.
+            capture_python_logger: Forward Python logging to Lumberjack. Default: False.
+            python_logger_level: Minimum level for captured Python logs. Default: 'INFO'.
+            python_logger_name: Specific logger name to capture. If None, captures all.
+            
+            # Code snippet settings
+            code_snippet_enabled: Include code context in error logs. Default: True.
+            code_snippet_context_lines: Lines of code context to include. Default: 5.
+            code_snippet_max_frames: Maximum stack frames to process. Default: 20.
+            code_snippet_exclude_patterns: File patterns to exclude from snippets.
+            
+            # Internal settings
+            install_signal_handlers: Auto-install graceful shutdown handlers. Default: True.
+            
+            # Local server settings (for development)
+            local_server_enabled: Enable local development server mode. Default: False.
+            local_server_endpoint: Local server endpoint. Default: 'localhost:4317'.
+            local_server_service_name: Service name for local server. Defaults to project_name.
+            
+            # Custom exporters (advanced usage)
+            custom_log_exporter: Custom log exporter instance for testing.
+            custom_span_exporter: Custom span exporter instance for testing.
+            custom_metrics_exporter: Custom metrics exporter instance for testing.
+            
+        Example:
+            >>> from lumberjack_sdk import Lumberjack
+            >>> 
+            >>> # Basic setup for production
+            >>> Lumberjack.init(
+            ...     project_name="my-app",
+            ...     api_key="your-api-key",
+            ...     env="production"
+            ... )
+            >>> 
+            >>> # Development setup with local server
+            >>> Lumberjack.init(
+            ...     project_name="my-app",
+            ...     local_server_enabled=True,
+            ...     debug_mode=True,
+            ...     log_to_stdout=True
+            ... )
+            
+        Note:
+            This is the recommended way to initialize Lumberjack. This class method
+            creates a singleton instance. Multiple calls will reinitialize the same
+            instance. Use environment variables (LUMBERJACK_*) to override settings.
         """
         cls(**kwargs)  # Triggers __new__ and __init__
 

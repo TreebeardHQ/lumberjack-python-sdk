@@ -1,0 +1,52 @@
+from typing import Any, TypedDict
+
+ERROR_KEY: str
+TS_KEY: str
+TRACE_ID_KEY_RESERVED_V2: str
+SPAN_ID_KEY_RESERVED_V2: str
+MESSAGE_KEY_RESERVED_V2: str
+LEVEL_KEY_RESERVED_V2: str
+ERROR_KEY_RESERVED_V2: str
+TS_KEY_RESERVED_V2: str
+FILE_KEY_RESERVED_V2: str
+LINE_KEY_RESERVED_V2: str
+FUNCTION_KEY_RESERVED_V2: str
+TRACEBACK_KEY_RESERVED_V2: str
+TRACE_NAME_KEY_RESERVED_V2: str
+SOURCE_KEY_RESERVED_V2: str
+EXEC_TYPE_RESERVED_V2: str
+EXEC_VALUE_RESERVED_V2: str
+LOGGER_NAME_KEY_RESERVED_V2: str
+COMPACT_TRACE_ID_KEY: str
+COMPACT_SPAN_ID_KEY: str
+COMPACT_MESSAGE_KEY: str
+COMPACT_LEVEL_KEY: str
+COMPACT_TS_KEY: str
+COMPACT_FILE_KEY: str
+COMPACT_LINE_KEY: str
+COMPACT_TRACEBACK_KEY: str
+COMPACT_EXEC_TYPE_KEY: str
+COMPACT_EXEC_VALUE_KEY: str
+COMPACT_TRACE_NAME_KEY: str
+COMPACT_SOURCE_KEY: str
+COMPACT_FUNCTION_KEY: str
+COMPACT_LOGGER_NAME_KEY: str
+TRACE_START_MARKER: str
+TRACE_COMPLETE_SUCCESS_MARKER: str
+TRACE_COMPLETE_ERROR_MARKER: str
+TAGS_KEY: str
+
+class LogEntry(TypedDict, total=False):
+    lvl: str
+    tid: str
+    sid: str
+    msg: str
+    fl: str
+    ln: int
+    fn: str
+    tb: str
+    src: str
+    ext: str
+    exv: str
+    ts: float | None
+    props: dict[str, Any] | None
