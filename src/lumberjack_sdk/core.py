@@ -16,7 +16,7 @@ from opentelemetry import trace
 from opentelemetry import metrics
 from opentelemetry._logs import Logger   # type: ignore[attr-defined]
 from opentelemetry.sdk._logs import LoggerProvider  # type: ignore[attr-defined]
-from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, SimpleLogRecordProcessor  # type: ignore[attr-defined]
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, SimpleLogRecordProcessor, ConsoleLogExporter  # type: ignore[attr-defined]
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -452,6 +452,11 @@ class Lumberjack:
             export_timeout_millis=int(batch_age * 1000)
         )
         self._logger_provider.add_log_record_processor(self._log_processor)
+        
+        # Add console output processor if requested
+        if self._config.should_log_to_stdout():
+            console_processor = SimpleLogRecordProcessor(ConsoleLogExporter())
+            self._logger_provider.add_log_record_processor(console_processor)
         
         # Add local server exporter if enabled
         self._local_server_processor = None

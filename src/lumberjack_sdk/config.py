@@ -227,7 +227,7 @@ class LumberjackConfig:
             self.capture_stdout = self.api_key is not None
         
         if self.log_to_stdout is None:
-            self.log_to_stdout = self.debug_mode or self.api_key is None
+            self.log_to_stdout = True  # Default to console output unless explicitly disabled
         
         # Set default local server settings
         if self.local_server_enabled is None:
