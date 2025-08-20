@@ -16,7 +16,7 @@ from opentelemetry import trace
 from opentelemetry import metrics
 from opentelemetry._logs import Logger   # type: ignore[attr-defined]
 from opentelemetry.sdk._logs import LoggerProvider  # type: ignore[attr-defined]
-from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, SimpleLogRecordProcessor, ConsoleLogExporter  # type: ignore[attr-defined]
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, SimpleLogRecordProcessor  # type: ignore[attr-defined]
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -37,6 +37,7 @@ from .stdout_override import enable_stdout_override
 # LoggingContext removed - using OpenTelemetry context directly
 from .exporters import LumberjackLogExporter, LumberjackSpanExporter
 from .fallback_exporters import FallbackLogExporter
+from .console_formatter import LumberjackConsoleFormatter
 from .internal_utils.fallback_logger import fallback_logger, sdk_logger
 from .version import __version__
 
@@ -141,6 +142,8 @@ class Lumberjack:
         # Output settings
         log_to_stdout: Optional[bool] = None,
         stdout_log_level: Optional[str] = None,
+        stdout_log_format: Optional[str] = None,
+        stdout_date_format: Optional[str] = None,
         debug_mode: Optional[bool] = None,
         otel_format: Optional[bool] = None,
         
@@ -188,8 +191,10 @@ class Lumberjack:
             flush_interval: Interval (seconds) for flushing pending data. Default: 30.0.
             
             # Output settings
-            log_to_stdout: Whether to also log to console. Default: False.
+            log_to_stdout: Whether to also log to console. Default: True.
             stdout_log_level: Log level for console output ('DEBUG', 'INFO', etc.).
+            stdout_log_format: Python logging format string for console output.
+            stdout_date_format: Date format for console timestamps ('%H:%M:%S').
             debug_mode: Enable verbose SDK debug logging. Default: False.
             otel_format: Use OpenTelemetry format for console output. Default: False.
             
@@ -453,10 +458,25 @@ class Lumberjack:
         )
         self._logger_provider.add_log_record_processor(self._log_processor)
         
-        # Add console output processor if requested
+        # Add console output if requested (use standard Python logging for production)
         if self._config.should_log_to_stdout():
-            console_processor = SimpleLogRecordProcessor(ConsoleLogExporter())
-            self._logger_provider.add_log_record_processor(console_processor)
+            # Add a standard Python StreamHandler to root logger for console output
+            # This provides clean, formatted console logs without the verbose OTel format
+            import logging
+            root_logger = logging.getLogger()
+            
+            # Only add handler if not already present (avoid duplicates)
+            has_stream_handler = any(isinstance(h, logging.StreamHandler) for h in root_logger.handlers)
+            if not has_stream_handler:
+                console_handler = logging.StreamHandler()
+                console_handler.setFormatter(LumberjackConsoleFormatter(
+                    self._config.stdout_log_format,
+                    datefmt=self._config.stdout_date_format
+                ))
+                # Set console handler level to match stdout_log_level config
+                console_level = self._config.get_logging_level(self._config.stdout_log_level)
+                console_handler.setLevel(console_level)
+                root_logger.addHandler(console_handler)
         
         # Add local server exporter if enabled
         self._local_server_processor = None
@@ -655,8 +675,10 @@ class Lumberjack:
             flush_interval: Interval (seconds) for flushing pending data. Default: 30.0.
             
             # Output settings
-            log_to_stdout: Whether to also log to console. Default: False.
+            log_to_stdout: Whether to also log to console. Default: True.
             stdout_log_level: Log level for console output ('DEBUG', 'INFO', etc.).
+            stdout_log_format: Python logging format string for console output.
+            stdout_date_format: Date format for console timestamps ('%H:%M:%S').
             debug_mode: Enable verbose SDK debug logging. Default: False.
             otel_format: Use OpenTelemetry format for console output. Default: False.
             

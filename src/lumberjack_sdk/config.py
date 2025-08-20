@@ -45,6 +45,8 @@ class LumberjackConfig:
     # Output settings
     log_to_stdout: Optional[bool] = None
     stdout_log_level: str = "INFO"
+    stdout_log_format: str = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    stdout_date_format: str = "%H:%M:%S"
     debug_mode: bool = False
     otel_format: bool = False
     
@@ -129,6 +131,12 @@ class LumberjackConfig:
         stdout_log_level_env = os.getenv('LUMBERJACK_STDOUT_LOG_LEVEL')
         if stdout_log_level_env:
             self.stdout_log_level = stdout_log_level_env
+        stdout_log_format_env = os.getenv('LUMBERJACK_STDOUT_LOG_FORMAT')
+        if stdout_log_format_env:
+            self.stdout_log_format = stdout_log_format_env
+        stdout_date_format_env = os.getenv('LUMBERJACK_STDOUT_DATE_FORMAT')
+        if stdout_date_format_env:
+            self.stdout_date_format = stdout_date_format_env
         debug_mode_env = os.getenv('LUMBERJACK_DEBUG_MODE')
         if debug_mode_env:
             self.debug_mode = debug_mode_env.lower() in ('true', '1', 'yes', 'on')
@@ -281,6 +289,8 @@ class LumberjackConfig:
             'flush_interval': self.flush_interval,
             'log_to_stdout': self.log_to_stdout,
             'stdout_log_level': self.stdout_log_level,
+            'stdout_log_format': self.stdout_log_format,
+            'stdout_date_format': self.stdout_date_format,
             'debug_mode': self.debug_mode,
             'otel_format': self.otel_format,
             'capture_stdout': self.capture_stdout,
