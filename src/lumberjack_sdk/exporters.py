@@ -312,47 +312,76 @@ class LumberjackLogExporter(LogExporter):
             
             # Extract attributes and map to Lumberjack format
             if log_record.attributes:
-                # Look for standard fields
-                formatted_log[COMPACT_FILE_KEY] = log_record.attributes.get("code.filepath", "")
-                # Line number must be an integer or omitted
-                line_no = log_record.attributes.get("code.lineno")
+                # Create a copy of attributes to avoid modifying the original
+                attrs = dict(log_record.attributes)
+                
+                # Remove Lumberjack reserved keys before processing
+                from .constants import (
+                    ERROR_KEY, TS_KEY,
+                    TRACE_ID_KEY_RESERVED_V2, SPAN_ID_KEY_RESERVED_V2, MESSAGE_KEY_RESERVED_V2,
+                    LEVEL_KEY_RESERVED_V2, ERROR_KEY_RESERVED_V2, TS_KEY_RESERVED_V2,
+                    FILE_KEY_RESERVED_V2, LINE_KEY_RESERVED_V2, FUNCTION_KEY_RESERVED_V2,
+                    TRACEBACK_KEY_RESERVED_V2, TRACE_NAME_KEY_RESERVED_V2, SOURCE_KEY_RESERVED_V2,
+                    EXEC_TYPE_RESERVED_V2, EXEC_VALUE_RESERVED_V2, LOGGER_NAME_KEY_RESERVED_V2,
+                    COMPACT_TRACE_ID_KEY, COMPACT_SPAN_ID_KEY, COMPACT_MESSAGE_KEY,
+                    COMPACT_LEVEL_KEY, COMPACT_TS_KEY, COMPACT_FILE_KEY, COMPACT_LINE_KEY,
+                    COMPACT_TRACEBACK_KEY, COMPACT_EXEC_TYPE_KEY, COMPACT_EXEC_VALUE_KEY,
+                    COMPACT_TRACE_NAME_KEY, COMPACT_SOURCE_KEY, COMPACT_FUNCTION_KEY,
+                    COMPACT_LOGGER_NAME_KEY, TRACE_START_MARKER, TRACE_COMPLETE_SUCCESS_MARKER,
+                    TRACE_COMPLETE_ERROR_MARKER, TAGS_KEY
+                )
+                
+                reserved_keys = {
+                    ERROR_KEY, TS_KEY,
+                    TRACE_ID_KEY_RESERVED_V2, SPAN_ID_KEY_RESERVED_V2, MESSAGE_KEY_RESERVED_V2,
+                    LEVEL_KEY_RESERVED_V2, ERROR_KEY_RESERVED_V2, TS_KEY_RESERVED_V2,
+                    FILE_KEY_RESERVED_V2, LINE_KEY_RESERVED_V2, FUNCTION_KEY_RESERVED_V2,
+                    TRACEBACK_KEY_RESERVED_V2, TRACE_NAME_KEY_RESERVED_V2, SOURCE_KEY_RESERVED_V2,
+                    EXEC_TYPE_RESERVED_V2, EXEC_VALUE_RESERVED_V2, LOGGER_NAME_KEY_RESERVED_V2,
+                    COMPACT_TRACE_ID_KEY, COMPACT_SPAN_ID_KEY, COMPACT_MESSAGE_KEY,
+                    COMPACT_LEVEL_KEY, COMPACT_TS_KEY, COMPACT_FILE_KEY, COMPACT_LINE_KEY,
+                    COMPACT_TRACEBACK_KEY, COMPACT_EXEC_TYPE_KEY, COMPACT_EXEC_VALUE_KEY,
+                    COMPACT_TRACE_NAME_KEY, COMPACT_SOURCE_KEY, COMPACT_FUNCTION_KEY,
+                    COMPACT_LOGGER_NAME_KEY, TRACE_START_MARKER, TRACE_COMPLETE_SUCCESS_MARKER,
+                    TRACE_COMPLETE_ERROR_MARKER, TAGS_KEY
+                }
+                
+                # Pop out reserved keys
+                for key in reserved_keys:
+                    attrs.pop(key, None)
+                
+                # Look for standard fields - support multiple OpenTelemetry attribute names
+                file_path = (attrs.get("code.filepath") or 
+                           attrs.get("code.file.path", ""))
+                formatted_log[COMPACT_FILE_KEY] = file_path
+                
+                # Line number must be an integer or omitted - support multiple attribute names
+                line_no = (attrs.get("code.lineno") or 
+                          attrs.get("code.line.number"))
                 if line_no is not None and line_no != "":
                     try:
                         formatted_log[COMPACT_LINE_KEY] = int(line_no)
                     except (ValueError, TypeError):
                         pass  # Don't include line number if it can't be converted to int
-                formatted_log[COMPACT_FUNCTION_KEY] = log_record.attributes.get("code.function", "")
+                
+                function_name = (attrs.get("code.function") or 
+                               attrs.get("code.function.name", ""))
+                formatted_log[COMPACT_FUNCTION_KEY] = function_name
                 
                 # Exception info
-                if "exception.type" in log_record.attributes:
-                    formatted_log[COMPACT_EXEC_TYPE_KEY] = log_record.attributes.get(
-                        "exception.type", ""
-                    )
-                    formatted_log[COMPACT_EXEC_VALUE_KEY] = log_record.attributes.get(
-                        "exception.message", ""
-                    )
-                    formatted_log[COMPACT_TRACEBACK_KEY] = log_record.attributes.get(
-                        "exception.stacktrace", ""
-                    )
+                if "exception.type" in attrs:
+                    formatted_log[COMPACT_EXEC_TYPE_KEY] = attrs.get("exception.type", "")
+                    formatted_log[COMPACT_EXEC_VALUE_KEY] = attrs.get("exception.message", "")
+                    formatted_log[COMPACT_TRACEBACK_KEY] = attrs.get("exception.stacktrace", "")
                 
                 # Source override
-                if "source" in log_record.attributes:
-                    formatted_log[COMPACT_SOURCE_KEY] = log_record.attributes["source"]
+                source_override = attrs.get("source")
+                if source_override:
+                    formatted_log[COMPACT_SOURCE_KEY] = source_override
                 
                 # Collect remaining attributes as props
-                props = {}
-                standard_keys = {
-                    "code.filepath", "code.lineno", "code.function",
-                    "exception.type", "exception.message", "exception.stacktrace",
-                    "source"
-                }
-                
-                for key, value in log_record.attributes.items():
-                    if key not in standard_keys:
-                        props[key] = value
-                
-                if props:
-                    formatted_log["props"] = props
+                if attrs:
+                    formatted_log["props"] = attrs
             
             formatted_logs.append(formatted_log)
         
