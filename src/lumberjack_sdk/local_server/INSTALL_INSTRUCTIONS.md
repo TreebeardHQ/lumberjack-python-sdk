@@ -27,22 +27,13 @@ The Lumberjack SDK sends logs to a local GRPC collector on port 4317 for develop
 
 ## Step 1.5: Environment Setup
 
-Before configuring the SDK, you need to set the local server environment variable. Claude will:
+Add `LUMBERJACK_LOCAL_SERVER_ENABLED=true` to your project's `.env` file to enable local development mode:
 
-1. **Check for existing environment configuration** (like .env files, docker-compose.yml, etc.)
-2. **If found**: Add `LUMBERJACK_LOCAL_SERVER_ENABLED=true` to the existing configuration
-3. **If not found**: Instruct you to add the environment variable to your development environment
-
-**Environment variable to set:**
 ```bash
 LUMBERJACK_LOCAL_SERVER_ENABLED=true
 ```
 
-**Common ways to set this:**
-- Add to `.env` file in your project root
-- Export in your shell: `export LUMBERJACK_LOCAL_SERVER_ENABLED=true`
-- Add to your IDE's run configuration
-- Add to docker-compose.yml environment section
+This will automatically configure the SDK to send logs to your local Lumberjack server instead of the production API.
 
 ## Step 2: Detect the Web Framework
 Search the codebase to determine which framework is being used:
@@ -256,7 +247,7 @@ The SDK automatically captures trace context for distributed tracing when availa
 
 ## What You Should Do Now
 
-1. **Check for existing Lumberjack usage** first - if found, ONLY ensure `LUMBERJACK_LOCAL_SERVER_ENABLED=true` environment variable is set
+1. **Check for existing Lumberjack usage** first - if found, ONLY add `LUMBERJACK_LOCAL_SERVER_ENABLED=true` to your `.env` file
 2. **If no existing Lumberjack**, detect the framework by searching the codebase
 3. **Add the dependency** with the correct extras:
    - **Production deps**: `lumberjack-sdk[flask]` (or fastapi/django)
@@ -264,10 +255,10 @@ The SDK automatically captures trace context for distributed tracing when availa
    - Prefer adding `local-server` to dev dependencies when possible
 4. **Add the initialization code** to the main application file with:
    - Only `project_name` parameter (REQUIRED)
-   - Set `LUMBERJACK_LOCAL_SERVER_ENABLED=true` environment variable
+   - Add `LUMBERJACK_LOCAL_SERVER_ENABLED=true` to your `.env` file
 5. **For web frameworks**: Also add the instrumentation call (LumberjackFlask.instrument(app), etc.)
 6. **For FastAPI**: ALWAYS update Settings class to include LUMBERJACK_* fields (even without explicit extra="forbid")
-7. **RESPECT existing settings** - do not modify existing configuration except for adding the environment variable
+7. **RESPECT existing settings** - do not modify existing configuration except for adding `LUMBERJACK_LOCAL_SERVER_ENABLED=true` to `.env`
 
 ## Expected Changes
 

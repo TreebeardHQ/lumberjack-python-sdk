@@ -782,7 +782,7 @@ export function DataTable({
                       className="h-24 text-center"
                     >
                       {isConnected
-                        ? "No logs yet. Start your application to see logs here!"
+                        ? "No logs yet. Start your application to see logs here! Remember to set LUMBERJACK_LOCAL_SERVER_ENABLED=true in your project environment locally."
                         : "Connecting to log server..."}
                     </TableCell>
                   </TableRow>

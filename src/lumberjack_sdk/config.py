@@ -239,8 +239,8 @@ class LumberjackConfig:
         
         # Set default local server settings
         if self.local_server_enabled is None:
-            # Enable local server if explicitly requested or in development mode
-            self.local_server_enabled = self.debug_mode
+            # Enable local server if not in production environment
+            self.local_server_enabled = self.env != "production"
         
         # Set service name for local server
         if self.local_server_service_name is None:

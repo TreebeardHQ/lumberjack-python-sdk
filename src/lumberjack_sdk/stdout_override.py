@@ -4,10 +4,11 @@ Stdout override functionality for capturing print statements.
 This module provides functionality to intercept stdout (print statements) 
 and log them through Lumberjack while still allowing normal output.
 """
+import inspect
 import sys
 import threading
 import time
-from typing import Optional, TextIO
+from typing import Any, Dict, Optional, TextIO, Tuple
 
 from opentelemetry import _logs as logs, context
 from opentelemetry._logs import SeverityNumber
@@ -19,6 +20,28 @@ from .internal_utils.fallback_logger import sdk_logger
 
 # Thread-local guard to prevent recursive printing
 _guard = threading.local()
+
+
+def _get_code_attribution() -> Tuple[Optional[str], Optional[int], Optional[str]]:
+    """Extract file path, line number, and function name from the call stack.
+    
+    Similar to the pattern used in log.py, this finds the first frame that's not
+    from the lumberjack SDK to identify where the print statement originated.
+    
+    Returns:
+        Tuple of (filename, line_number, function_name) or (None, None, None) if extraction fails
+    """
+    try:
+        # Walk through the call stack to find the first non-SDK frame
+        for frame_info in inspect.stack():
+            frame_file = frame_info.filename
+            if "lumberjack" not in frame_file and "<frozen" not in frame_file:
+                return frame_file, frame_info.lineno, frame_info.function
+        # If we couldn't find a non-SDK frame, return None values
+        return None, None, None
+    except Exception:
+        # If extraction fails for any reason, return None values
+        return None, None, None
 
 
 class StdoutWriter:
@@ -57,6 +80,20 @@ class StdoutWriter:
                     # This will use our configured LoggerProvider if available
                     otel_logger = logs.get_logger(__name__)
                     if otel_logger:
+                        # Extract code attribution for the print statement
+                        filename, line_number, function_name = _get_code_attribution()
+                        
+                        # Build attributes with code attribution
+                        attributes: Dict[str, Any] = {SOURCE_KEY_RESERVED_V2: "print"}
+                        
+                        # Add OpenTelemetry semantic convention attributes
+                        if filename:
+                            attributes["code.file.path"] = filename
+                        if line_number is not None:
+                            attributes["code.line.number"] = line_number
+                        if function_name:
+                            attributes["code.function.name"] = function_name
+                        
                         # Create SDK LogRecord with all required fields for OTLP/GRPC exporters
                         now_ns = int(time.time_ns())
                         log_record = SDKLogRecord(
@@ -66,7 +103,7 @@ class StdoutWriter:
                             severity_number=SeverityNumber.INFO,
                             body=clean_text,
                             resource=otel_logger.resource,  # Get resource from logger
-                            attributes={SOURCE_KEY_RESERVED_V2: "print"}
+                            attributes=attributes
                         )
                         otel_logger.emit(log_record)
         except Exception as e:
