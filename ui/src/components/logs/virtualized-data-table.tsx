@@ -23,7 +23,6 @@ import { Switch } from "@/components/ui/switch";
 import {
   Tooltip,
   TooltipContent,
-  TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
@@ -37,17 +36,15 @@ import {
   Code2,
   ChevronUp,
   Loader2,
+  Code,
+  Copy,
 } from "lucide-react";
 import { useState, useEffect, useRef, useCallback } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { useSettings } from "@/hooks/useSettings";
 import { EditorSelectionModal } from "@/components/editor-selection-modal";
-import { createColumns, AttributesPopoverContent } from "./columns";
+import { createColumns } from "./columns";
 import { LoadMoreButton } from "./load-more-button";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 
 import type { LogEntry } from "@/types/logs";
 
@@ -60,6 +57,49 @@ interface VirtualizedDataTableProps {
   isLoading?: boolean;
   hasMore?: boolean;
 }
+
+// Helper function to detect if a log entry has exception information
+const hasExceptionData = (attributes: Record<string, any>): boolean => {
+  return !!(
+    attributes?.["exception.type"] ||
+    attributes?.["exception.message"] ||
+    attributes?.["exception.stacktrace"]
+  );
+};
+
+// Function to open file in editor
+const openInEditor = (
+  filePath: string,
+  lineNumber: number | string,
+  editor: "cursor" | "vscode"
+) => {
+  const line =
+    typeof lineNumber === "string" ? parseInt(lineNumber) : lineNumber;
+  if (isNaN(line)) return;
+
+  let command = "";
+  if (editor === "cursor") {
+    command = `cursor://file${filePath}:${line}`;
+  } else if (editor === "vscode") {
+    command = `vscode://file${filePath}:${line}`;
+  }
+
+  if (command) {
+    try {
+      // Use location.href for custom URL schemes to work properly
+      window.location.href = command;
+    } catch (error) {
+      console.error("Failed to open editor:", error);
+      // Fallback: try creating a temporary link and clicking it
+      const link = document.createElement("a");
+      link.href = command;
+      link.style.display = "none";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+  }
+};
 
 export function VirtualizedDataTable({
   data,
@@ -82,7 +122,12 @@ export function VirtualizedDataTable({
   const [isAtTop, setIsAtTop] = useState(true);
   const [scrollWhenTailing, setScrollWhenTailing] = useState(true);
   const [showScrollToTop, setShowScrollToTop] = useState(false);
+  const [selectedRow, setSelectedRow] = useState<{
+    id: string;
+    attributes: Record<string, any>;
+  } | null>(null);
   const [showEditorModal, setShowEditorModal] = useState(false);
+  const [hoveredRow, setHoveredRow] = useState<string | null>(null);
 
   const { settings, loading, setFontSize, toggleDarkMode, setEditor } =
     useSettings();
@@ -207,10 +252,8 @@ export function VirtualizedDataTable({
     setGlobalFilter("");
   };
 
-  // Create columns with editor support
-  const columns = createColumns(settings?.editor || null, () => {
-    setShowEditorModal(true);
-  });
+  // Create columns without editor support (we'll handle this in the hover menu)
+  const columns = createColumns();
 
   const table = useReactTable({
     data,
@@ -246,23 +289,11 @@ export function VirtualizedDataTable({
 
   const { rows } = table.getRowModel();
 
-  const estimateSize = useCallback(() => {
-    // Estimate row height based on font size
-    switch (settings?.fontSize) {
-      case "small":
-        return 32;
-      case "large":
-        return 48;
-      default:
-        return 40;
-    }
-  }, [settings?.fontSize]);
-
-  // Virtualization
+  // Virtualization with dynamic sizing
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize,
+    estimateSize: () => 40, // Just a rough estimate, actual size will be measured
     overscan: 10,
   });
 
@@ -372,395 +403,392 @@ export function VirtualizedDataTable({
   }
 
   return (
-    <TooltipProvider delayDuration={0}>
-      <div className="w-full h-full flex flex-col space-y-4">
-        {/* Header with controls */}
-        <div className="flex-shrink-0 flex items-center justify-between pt-2">
-          <div className="flex items-center gap-4">
+    <div className="w-full h-full flex flex-col space-y-4">
+      {/* Header with controls */}
+      <div className="flex-shrink-0 flex items-center justify-between pt-2">
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <Badge
+              variant={isConnected ? "default" : "destructive"}
+              className="text-xs"
+            >
+              {isConnected ? "Connected" : "Disconnected"}
+            </Badge>
             <div className="flex items-center gap-2">
-              <Badge
-                variant={isConnected ? "default" : "destructive"}
-                className="text-xs"
-              >
-                {isConnected ? "Connected" : "Disconnected"}
-              </Badge>
-              <div className="flex items-center gap-2">
-                <Switch checked={isTailing} onCheckedChange={onTailingChange} />
-                <span className="text-sm text-muted-foreground flex items-center gap-1">
-                  {isTailing ? (
-                    <Play className="h-3 w-3" />
-                  ) : (
-                    <Pause className="h-3 w-3" />
-                  )}
-                  Tailing
-                </span>
-              </div>
-            </div>
-            <div className="text-sm text-muted-foreground flex items-center gap-2">
-              {data.length} logs
-              {isLoading && <Loader2 className="h-3 w-3 animate-spin" />}
+              <Switch checked={isTailing} onCheckedChange={onTailingChange} />
+              <span className="text-sm text-muted-foreground flex items-center gap-1">
+                {isTailing ? (
+                  <Play className="h-3 w-3" />
+                ) : (
+                  <Pause className="h-3 w-3" />
+                )}
+                Tailing
+              </span>
             </div>
           </div>
-
-          <div className="flex items-center gap-2">
-            {/* Level Filter */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant={isLevelFilterActive() ? "default" : "outline"}
-                  size="sm"
-                >
-                  {isLevelFilterActive()
-                    ? `Level (${getActiveLevels().length}/${
-                        getAllLevels().length
-                      })`
-                    : "Level"}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start">
-                {["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"].map(
-                  (level) => {
-                    const levelColumn = table.getColumn("level");
-                    const currentFilter = levelColumn?.getFilterValue() as
-                      | string[]
-                      | undefined;
-                    const allLevels = [
-                      "DEBUG",
-                      "INFO",
-                      "WARNING",
-                      "ERROR",
-                      "CRITICAL",
-                    ];
-
-                    return (
-                      <DropdownMenuCheckboxItem
-                        key={level}
-                        checked={
-                          currentFilter ? currentFilter.includes(level) : true
-                        }
-                        onCheckedChange={(checked) => {
-                          if (!currentFilter) {
-                            const newFilter = checked
-                              ? allLevels
-                              : allLevels.filter((l) => l !== level);
-                            levelColumn?.setFilterValue(newFilter);
-                          } else {
-                            if (checked) {
-                              const newFilter = [...currentFilter, level];
-                              levelColumn?.setFilterValue(newFilter);
-                            } else {
-                              const newFilter = currentFilter.filter(
-                                (l) => l !== level
-                              );
-                              levelColumn?.setFilterValue(
-                                newFilter.length === allLevels.length
-                                  ? undefined
-                                  : newFilter
-                              );
-                            }
-                          }
-                        }}
-                      >
-                        {level}
-                      </DropdownMenuCheckboxItem>
-                    );
-                  }
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-
-            {/* Service Filter */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant={isServiceFilterActive() ? "default" : "outline"}
-                  size="sm"
-                >
-                  {isServiceFilterActive()
-                    ? `Service (${getActiveServices().length}/${
-                        getAllServices().length
-                      })`
-                    : "Service"}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start">
-                {Array.from(new Set(data.map((item) => (item as any).service)))
-                  .sort()
-                  .map((service) => {
-                    const serviceColumn = table.getColumn("service");
-                    const currentFilter = serviceColumn?.getFilterValue() as
-                      | string[]
-                      | undefined;
-                    const allServices = Array.from(
-                      new Set(data.map((item) => (item as any).service))
-                    ).sort();
-
-                    return (
-                      <DropdownMenuCheckboxItem
-                        key={service}
-                        checked={
-                          currentFilter ? currentFilter.includes(service) : true
-                        }
-                        onCheckedChange={(checked) => {
-                          if (!currentFilter) {
-                            const newFilter = checked
-                              ? allServices
-                              : allServices.filter((s) => s !== service);
-                            serviceColumn?.setFilterValue(newFilter);
-                          } else {
-                            if (checked) {
-                              const newFilter = [...currentFilter, service];
-                              serviceColumn?.setFilterValue(newFilter);
-                            } else {
-                              const newFilter = currentFilter.filter(
-                                (s) => s !== service
-                              );
-                              serviceColumn?.setFilterValue(
-                                newFilter.length === allServices.length
-                                  ? undefined
-                                  : newFilter
-                              );
-                            }
-                          }
-                        }}
-                      >
-                        {service}
-                      </DropdownMenuCheckboxItem>
-                    );
-                  })}
-              </DropdownMenuContent>
-            </DropdownMenu>
-
-            {/* Search */}
-            <div className="relative">
-              <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search logs..."
-                value={globalFilter}
-                onChange={(event) => setGlobalFilter(event.target.value)}
-                className="pl-10 pr-10 w-80"
-              />
-              {globalFilter && (
-                <button
-                  onClick={() => setGlobalFilter("")}
-                  className="absolute right-3 top-3 h-4 w-4 text-muted-foreground hover:text-foreground"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              )}
-            </div>
-
-            {/* Dark Mode Toggle */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="outline" size="sm" onClick={toggleDarkMode}>
-                  {settings.darkMode ? (
-                    <Sun className="h-4 w-4" />
-                  ) : (
-                    <Moon className="h-4 w-4" />
-                  )}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent className="animate-none">
-                <p>
-                  {settings.darkMode
-                    ? "Switch to light mode"
-                    : "Switch to dark mode"}
-                </p>
-              </TooltipContent>
-            </Tooltip>
-
-            {/* Editor Selection */}
-            <Tooltip>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <TooltipTrigger asChild>
-                    <Button variant="outline" size="sm">
-                      <Code2 className="h-4 w-4" />
-                    </Button>
-                  </TooltipTrigger>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuCheckboxItem
-                    checked={settings.editor === null}
-                    onCheckedChange={() => setEditor(null)}
-                  >
-                    None
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={settings.editor === "cursor"}
-                    onCheckedChange={() => setEditor("cursor")}
-                  >
-                    Cursor
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={settings.editor === "vscode"}
-                    onCheckedChange={() => setEditor("vscode")}
-                  >
-                    VS Code
-                  </DropdownMenuCheckboxItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-              <TooltipContent className="animate-none">
-                <p>Select code editor</p>
-              </TooltipContent>
-            </Tooltip>
-
-            {/* Font Size */}
-            <Tooltip>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <TooltipTrigger asChild>
-                    <Button variant="outline" size="sm">
-                      Aa
-                    </Button>
-                  </TooltipTrigger>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuCheckboxItem
-                    checked={settings.fontSize === "small"}
-                    onCheckedChange={() => setFontSize("small")}
-                  >
-                    Small
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={settings.fontSize === "medium"}
-                    onCheckedChange={() => setFontSize("medium")}
-                  >
-                    Medium
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={settings.fontSize === "large"}
-                    onCheckedChange={() => setFontSize("large")}
-                  >
-                    Large
-                  </DropdownMenuCheckboxItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-              <TooltipContent className="animate-none">
-                <p>Change font size</p>
-              </TooltipContent>
-            </Tooltip>
+          <div className="text-sm text-muted-foreground flex items-center gap-2">
+            {data.length} logs
+            {isLoading && <Loader2 className="h-3 w-3 animate-spin" />}
           </div>
         </div>
 
-        {/* Active Filter Chips */}
-        {(isLevelFilterActive() ||
-          isServiceFilterActive() ||
-          globalFilter ||
-          isLevelFilterEmpty() ||
-          isServiceFilterEmpty()) && (
-          <div className="flex flex-wrap items-center gap-2 p-2 bg-muted/30 rounded-md">
-            <span className="text-sm text-muted-foreground font-medium">
-              Active filters:
-            </span>
-
-            {/* Level filter chips */}
-            {isLevelFilterEmpty() ? (
-              <Badge
-                variant="destructive"
-                className="flex items-center gap-2 pr-1"
+        <div className="flex items-center gap-2">
+          {/* Level Filter */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant={isLevelFilterActive() ? "default" : "outline"}
+                size="sm"
               >
-                No levels selected
-                <button
-                  onClick={() => {
-                    const levelColumn = table.getColumn("level");
-                    levelColumn?.setFilterValue(undefined);
-                  }}
-                  className="hover:bg-destructive-foreground/20 rounded-full p-1 transition-colors"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </Badge>
-            ) : (
-              isLevelFilterActive() && (
-                <>
-                  {getActiveLevels().map((level) => (
-                    <Badge
-                      key={`level-${level}`}
-                      variant="secondary"
-                      className="flex items-center gap-2 pr-1"
+                {isLevelFilterActive()
+                  ? `Level (${getActiveLevels().length}/${
+                      getAllLevels().length
+                    })`
+                  : "Level"}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              {["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"].map(
+                (level) => {
+                  const levelColumn = table.getColumn("level");
+                  const currentFilter = levelColumn?.getFilterValue() as
+                    | string[]
+                    | undefined;
+                  const allLevels = [
+                    "DEBUG",
+                    "INFO",
+                    "WARNING",
+                    "ERROR",
+                    "CRITICAL",
+                  ];
+
+                  return (
+                    <DropdownMenuCheckboxItem
+                      key={level}
+                      checked={
+                        currentFilter ? currentFilter.includes(level) : true
+                      }
+                      onCheckedChange={(checked) => {
+                        if (!currentFilter) {
+                          const newFilter = checked
+                            ? allLevels
+                            : allLevels.filter((l) => l !== level);
+                          levelColumn?.setFilterValue(newFilter);
+                        } else {
+                          if (checked) {
+                            const newFilter = [...currentFilter, level];
+                            levelColumn?.setFilterValue(newFilter);
+                          } else {
+                            const newFilter = currentFilter.filter(
+                              (l) => l !== level
+                            );
+                            levelColumn?.setFilterValue(
+                              newFilter.length === allLevels.length
+                                ? undefined
+                                : newFilter
+                            );
+                          }
+                        }
+                      }}
                     >
                       {level}
-                      <button
-                        onClick={() => removeLevelFilter(level)}
-                        className="hover:bg-muted-foreground/20 rounded-full p-1 transition-colors"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </Badge>
-                  ))}
-                </>
-              )
-            )}
+                    </DropdownMenuCheckboxItem>
+                  );
+                }
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
 
-            {/* Service filter chips */}
-            {isServiceFilterEmpty() ? (
-              <Badge
-                variant="destructive"
-                className="flex items-center gap-2 pr-1"
+          {/* Service Filter */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant={isServiceFilterActive() ? "default" : "outline"}
+                size="sm"
               >
-                No services selected
-                <button
-                  onClick={() => {
-                    const serviceColumn = table.getColumn("service");
-                    serviceColumn?.setFilterValue(undefined);
-                  }}
-                  className="hover:bg-destructive-foreground/20 rounded-full p-1 transition-colors"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </Badge>
-            ) : (
-              isServiceFilterActive() && (
-                <>
-                  {getActiveServices().map((service) => (
-                    <Badge
-                      key={`service-${service}`}
-                      variant="secondary"
-                      className="flex items-center gap-2 pr-1"
+                {isServiceFilterActive()
+                  ? `Service (${getActiveServices().length}/${
+                      getAllServices().length
+                    })`
+                  : "Service"}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              {Array.from(new Set(data.map((item) => (item as any).service)))
+                .sort()
+                .map((service) => {
+                  const serviceColumn = table.getColumn("service");
+                  const currentFilter = serviceColumn?.getFilterValue() as
+                    | string[]
+                    | undefined;
+                  const allServices = Array.from(
+                    new Set(data.map((item) => (item as any).service))
+                  ).sort();
+
+                  return (
+                    <DropdownMenuCheckboxItem
+                      key={service}
+                      checked={
+                        currentFilter ? currentFilter.includes(service) : true
+                      }
+                      onCheckedChange={(checked) => {
+                        if (!currentFilter) {
+                          const newFilter = checked
+                            ? allServices
+                            : allServices.filter((s) => s !== service);
+                          serviceColumn?.setFilterValue(newFilter);
+                        } else {
+                          if (checked) {
+                            const newFilter = [...currentFilter, service];
+                            serviceColumn?.setFilterValue(newFilter);
+                          } else {
+                            const newFilter = currentFilter.filter(
+                              (s) => s !== service
+                            );
+                            serviceColumn?.setFilterValue(
+                              newFilter.length === allServices.length
+                                ? undefined
+                                : newFilter
+                            );
+                          }
+                        }
+                      }}
                     >
                       {service}
-                      <button
-                        onClick={() => removeServiceFilter(service)}
-                        className="hover:bg-muted-foreground/20 rounded-full p-1 transition-colors"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </Badge>
-                  ))}
-                </>
-              )
-            )}
+                    </DropdownMenuCheckboxItem>
+                  );
+                })}
+            </DropdownMenuContent>
+          </DropdownMenu>
 
-            {/* Search filter chip */}
+          {/* Search */}
+          <div className="relative">
+            <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search logs..."
+              value={globalFilter}
+              onChange={(event) => setGlobalFilter(event.target.value)}
+              className="pl-10 pr-10 w-80"
+            />
             {globalFilter && (
-              <Badge
-                variant="secondary"
-                className="flex items-center gap-2 pr-1"
+              <button
+                onClick={() => setGlobalFilter("")}
+                className="absolute right-3 top-3 h-4 w-4 text-muted-foreground hover:text-foreground"
               >
-                Search: "{globalFilter}"
-                <button
-                  onClick={() => setGlobalFilter("")}
-                  className="hover:bg-muted-foreground/20 rounded-full p-1 transition-colors"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </Badge>
+                <X className="h-4 w-4" />
+              </button>
             )}
-
-            {/* Clear all button */}
-            <button
-              onClick={clearAllFilters}
-              className="text-sm text-muted-foreground hover:text-foreground ml-auto"
-            >
-              Clear all
-            </button>
           </div>
-        )}
 
-        {/* Virtualized Table */}
-        <div className="flex-1 rounded-md border relative min-w-0 overflow-hidden">
+          {/* Dark Mode Toggle */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="outline" size="sm" onClick={toggleDarkMode}>
+                {settings.darkMode ? (
+                  <Sun className="h-4 w-4" />
+                ) : (
+                  <Moon className="h-4 w-4" />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent className="animate-none">
+              <p>
+                {settings.darkMode
+                  ? "Switch to light mode"
+                  : "Switch to dark mode"}
+              </p>
+            </TooltipContent>
+          </Tooltip>
+
+          {/* Editor Selection */}
+          <Tooltip>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <TooltipTrigger asChild>
+                  <Button variant="outline" size="sm">
+                    <Code2 className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuCheckboxItem
+                  checked={settings.editor === null}
+                  onCheckedChange={() => setEditor(null)}
+                >
+                  None
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem
+                  checked={settings.editor === "cursor"}
+                  onCheckedChange={() => setEditor("cursor")}
+                >
+                  Cursor
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem
+                  checked={settings.editor === "vscode"}
+                  onCheckedChange={() => setEditor("vscode")}
+                >
+                  VS Code
+                </DropdownMenuCheckboxItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <TooltipContent className="animate-none">
+              <p>Select code editor</p>
+            </TooltipContent>
+          </Tooltip>
+
+          {/* Font Size */}
+          <Tooltip>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <TooltipTrigger asChild>
+                  <Button variant="outline" size="sm">
+                    Aa
+                  </Button>
+                </TooltipTrigger>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuCheckboxItem
+                  checked={settings.fontSize === "small"}
+                  onCheckedChange={() => setFontSize("small")}
+                >
+                  Small
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem
+                  checked={settings.fontSize === "medium"}
+                  onCheckedChange={() => setFontSize("medium")}
+                >
+                  Medium
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem
+                  checked={settings.fontSize === "large"}
+                  onCheckedChange={() => setFontSize("large")}
+                >
+                  Large
+                </DropdownMenuCheckboxItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <TooltipContent className="animate-none">
+              <p>Change font size</p>
+            </TooltipContent>
+          </Tooltip>
+        </div>
+      </div>
+
+      {/* Active Filter Chips */}
+      {(isLevelFilterActive() ||
+        isServiceFilterActive() ||
+        globalFilter ||
+        isLevelFilterEmpty() ||
+        isServiceFilterEmpty()) && (
+        <div className="flex flex-wrap items-center gap-2 p-2 bg-muted/30 rounded-md">
+          <span className="text-sm text-muted-foreground font-medium">
+            Active filters:
+          </span>
+
+          {/* Level filter chips */}
+          {isLevelFilterEmpty() ? (
+            <Badge
+              variant="destructive"
+              className="flex items-center gap-2 pr-1"
+            >
+              No levels selected
+              <button
+                onClick={() => {
+                  const levelColumn = table.getColumn("level");
+                  levelColumn?.setFilterValue(undefined);
+                }}
+                className="hover:bg-destructive-foreground/20 rounded-full p-1 transition-colors"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </Badge>
+          ) : (
+            isLevelFilterActive() && (
+              <>
+                {getActiveLevels().map((level) => (
+                  <Badge
+                    key={`level-${level}`}
+                    variant="secondary"
+                    className="flex items-center gap-2 pr-1"
+                  >
+                    {level}
+                    <button
+                      onClick={() => removeLevelFilter(level)}
+                      className="hover:bg-muted-foreground/20 rounded-full p-1 transition-colors"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                ))}
+              </>
+            )
+          )}
+
+          {/* Service filter chips */}
+          {isServiceFilterEmpty() ? (
+            <Badge
+              variant="destructive"
+              className="flex items-center gap-2 pr-1"
+            >
+              No services selected
+              <button
+                onClick={() => {
+                  const serviceColumn = table.getColumn("service");
+                  serviceColumn?.setFilterValue(undefined);
+                }}
+                className="hover:bg-destructive-foreground/20 rounded-full p-1 transition-colors"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </Badge>
+          ) : (
+            isServiceFilterActive() && (
+              <>
+                {getActiveServices().map((service) => (
+                  <Badge
+                    key={`service-${service}`}
+                    variant="secondary"
+                    className="flex items-center gap-2 pr-1"
+                  >
+                    {service}
+                    <button
+                      onClick={() => removeServiceFilter(service)}
+                      className="hover:bg-muted-foreground/20 rounded-full p-1 transition-colors"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                ))}
+              </>
+            )
+          )}
+
+          {/* Search filter chip */}
+          {globalFilter && (
+            <Badge variant="secondary" className="flex items-center gap-2 pr-1">
+              Search: "{globalFilter}"
+              <button
+                onClick={() => setGlobalFilter("")}
+                className="hover:bg-muted-foreground/20 rounded-full p-1 transition-colors"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </Badge>
+          )}
+
+          {/* Clear all button */}
+          <button
+            onClick={clearAllFilters}
+            className="text-sm text-muted-foreground hover:text-foreground ml-auto"
+          >
+            Clear all
+          </button>
+        </div>
+      )}
+
+      {/* Virtualized Table */}
+      <div className="flex-1 rounded-md border relative min-w-0 overflow-hidden flex">
+        <div className="flex-1 overflow-hidden relative">
           <div
             ref={parentRef}
             className="h-full overflow-auto overscroll-contain"
@@ -836,6 +864,40 @@ export function VirtualizedDataTable({
                 >;
                 const hasAttributes =
                   attributes && Object.keys(attributes).length > 0;
+                const isErrorRow = hasExceptionData(attributes);
+                const isHovered = hoveredRow === row.id;
+
+                // Check for code file and line information
+                const filePath = attributes?.["code.file.path"];
+                const lineNumber = attributes?.["code.line.number"];
+                const hasCodeInfo =
+                  filePath && lineNumber && lineNumber !== false;
+
+                const handleRowClick = () => {
+                  if (!hasAttributes) return;
+
+                  if (selectedRow?.id === row.id) {
+                    setSelectedRow(null);
+                  } else {
+                    setSelectedRow({ id: row.id, attributes });
+                  }
+                };
+
+                const handleCodeClick = () => {
+                  if (!hasCodeInfo) return;
+
+                  if (!settings?.editor) {
+                    setShowEditorModal(true);
+                    return;
+                  }
+
+                  openInEditor(filePath, lineNumber, settings.editor);
+                };
+
+                const handleCopyMessage = () => {
+                  const message = row.original.message;
+                  navigator.clipboard.writeText(message);
+                };
 
                 return (
                   <div
@@ -848,59 +910,145 @@ export function VirtualizedDataTable({
                       transform: `translateY(${virtualRow.start}px)`,
                     }}
                     data-index={virtualRow.index}
+                    ref={rowVirtualizer.measureElement}
                   >
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <div
-                          className={`flex hover:bg-muted/50 border-b border-border/50 items-center ${
-                            fontSizeClasses[settings.fontSize]
-                          } font-mono ${hasAttributes ? "cursor-pointer" : ""}`}
-                          style={{
-                            height: `${virtualRow.size}px`,
-                            minWidth: "100%",
-                          }}
-                        >
-                          {row.getVisibleCells().map((cell, cellIndex) => {
-                            const columnWidths = getColumnWidths(
-                              settings.fontSize
-                            );
-                            const widthClass =
-                              cellIndex === 0
-                                ? columnWidths.service
-                                : cellIndex === 1
-                                ? columnWidths.time
-                                : cellIndex === 2
-                                ? columnWidths.level
-                                : cellIndex === 3
-                                ? columnWidths.logger
-                                : cellIndex === 4
-                                ? "flex-1 min-w-0"
-                                : cellIndex === 5
-                                ? columnWidths.trace
-                                : "";
+                    <div
+                      className={`relative flex hover:bg-muted/50 border-b border-border/50 items-start py-1 ${
+                        fontSizeClasses[settings.fontSize]
+                      } font-mono ${hasAttributes ? "cursor-pointer" : ""} ${
+                        selectedRow?.id === row.id ? "bg-muted/30" : ""
+                      } ${
+                        isErrorRow
+                          ? "bg-red-50/70 dark:bg-red-950/20 border-red-200/50 dark:border-red-800/30"
+                          : ""
+                      }`}
+                      style={{
+                        minWidth: "100%",
+                      }}
+                      onClick={handleRowClick}
+                      onMouseEnter={() => setHoveredRow(row.id)}
+                      onMouseLeave={() => setHoveredRow(null)}
+                    >
+                      {/* Hover Menu */}
+                      <AnimatePresence>
+                        {isHovered && (
+                          <div className="absolute right-4 top-0 bottom-0 flex items-center z-20">
+                            <div className="flex items-center gap-1">
+                              {/* Open in Editor - Now leftmost */}
+                              {hasCodeInfo && (
+                                <motion.div
+                                  initial={{ x: "100%", opacity: 0 }}
+                                  animate={{ x: 0, opacity: 1 }}
+                                  exit={{ x: "100%", opacity: 0 }}
+                                  transition={{
+                                    type: "spring",
+                                    stiffness: 400,
+                                    damping: 40,
+                                    mass: 0.8,
+                                    delay: 0.1, // Leftmost item gets longer delay to arrive with others
+                                  }}
+                                  className="bg-background/95 backdrop-blur-sm border border-border/50 rounded-md shadow-lg"
+                                >
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleCodeClick();
+                                        }}
+                                        className="h-7 w-7 p-0 hover:bg-primary/10"
+                                      >
+                                        <Code className="h-3.5 w-3.5" />
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent
+                                      side="top"
+                                      className="text-xs px-2 py-1"
+                                    >
+                                      <p>
+                                        {filePath.split("/").pop()}:{lineNumber}{" "}
+                                        - Open in editor
+                                      </p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </motion.div>
+                              )}
 
-                            return (
-                              <div
-                                key={cell.id}
-                                className={`px-2 py-1 flex items-start ${widthClass} ${
-                                  cellIndex === 4 ? "break-all" : ""
-                                }`}
+                              {/* Copy Message - Now rightmost */}
+                              <motion.div
+                                initial={{ x: "100%", opacity: 0 }}
+                                animate={{ x: 0, opacity: 1 }}
+                                exit={{ x: "100%", opacity: 0 }}
+                                transition={{
+                                  type: "spring",
+                                  stiffness: 400,
+                                  damping: 40,
+                                  mass: 0.8,
+                                  delay: 0, // Rightmost item starts immediately
+                                }}
+                                className="bg-background/95 backdrop-blur-sm border border-border/50 rounded-md shadow-lg"
                               >
-                                {flexRender(
-                                  cell.column.columnDef.cell,
-                                  cell.getContext()
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </PopoverTrigger>
-                      {hasAttributes && (
-                        <PopoverContent className="w-80">
-                          <AttributesPopoverContent attributes={attributes} />
-                        </PopoverContent>
-                      )}
-                    </Popover>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleCopyMessage();
+                                      }}
+                                      className="h-7 w-7 p-0 hover:bg-primary/10"
+                                    >
+                                      <Copy className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent
+                                    side="top"
+                                    className="text-xs px-2 py-1"
+                                  >
+                                    <p>Copy message</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </motion.div>
+                            </div>
+                          </div>
+                        )}
+                      </AnimatePresence>
+
+                      {row.getVisibleCells().map((cell, cellIndex) => {
+                        const columnWidths = getColumnWidths(settings.fontSize);
+                        const widthClass =
+                          cellIndex === 0
+                            ? columnWidths.service
+                            : cellIndex === 1
+                            ? columnWidths.time
+                            : cellIndex === 2
+                            ? columnWidths.level
+                            : cellIndex === 3
+                            ? columnWidths.logger
+                            : cellIndex === 4
+                            ? "flex-1 min-w-0"
+                            : cellIndex === 5
+                            ? columnWidths.trace
+                            : "";
+
+                        return (
+                          <div
+                            key={cell.id}
+                            className={`px-2 py-1 flex items-start ${widthClass} ${
+                              cellIndex === 4 ? "break-all" : ""
+                            }`}
+                          >
+                            {flexRender(
+                              cell.column.columnDef.cell,
+                              cell.getContext()
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 );
               })}
@@ -948,13 +1096,100 @@ export function VirtualizedDataTable({
           )}
         </div>
 
-        {/* Editor Selection Modal */}
-        <EditorSelectionModal
-          open={showEditorModal}
-          onSelect={handleEditorSelect}
-          onClose={() => setShowEditorModal(false)}
-        />
+        {/* Details Panel */}
+        {selectedRow && (
+          <div className="w-80 border-l bg-background flex-shrink-0">
+            <div className="h-full flex flex-col">
+              <div className="px-4 py-3 border-b bg-muted/20">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-medium text-sm">Log Details</h3>
+                  <button
+                    onClick={() => setSelectedRow(null)}
+                    className="text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-auto px-4 py-3">
+                <div className="space-y-3">
+                  {/* Exception Details Section */}
+                  {hasExceptionData(selectedRow.attributes) && (
+                    <div>
+                      <h4 className="font-medium text-sm mb-2 text-red-600 dark:text-red-400">
+                        Exception Details
+                      </h4>
+                      <div className="space-y-2">
+                        {selectedRow.attributes["exception.stacktrace"] && (
+                          <div>
+                            <div className="text-[11px] font-medium text-red-600 dark:text-red-400 mb-1">
+                              Stack Trace
+                            </div>
+                            <div className="text-[9px] font-mono bg-red-50 dark:bg-red-950/30 p-2 rounded break-all max-h-48 overflow-y-auto border border-red-200 dark:border-red-800">
+                              <pre className="whitespace-pre-wrap">
+                                {selectedRow.attributes["exception.stacktrace"]}
+                              </pre>
+                            </div>
+                          </div>
+                        )}
+                        {selectedRow.attributes["exception.type"] && (
+                          <div>
+                            <div className="text-[11px] font-medium text-red-600 dark:text-red-400 mb-1">
+                              Exception Type
+                            </div>
+                            <div className="text-[11px] font-mono bg-red-50 dark:bg-red-950/30 p-2 rounded break-all border border-red-200 dark:border-red-800">
+                              {selectedRow.attributes["exception.type"]}
+                            </div>
+                          </div>
+                        )}
+                        {selectedRow.attributes["exception.message"] && (
+                          <div>
+                            <div className="text-[11px] font-medium text-red-600 dark:text-red-400 mb-1">
+                              Exception Message
+                            </div>
+                            <div className="text-[11px] font-mono bg-red-50 dark:bg-red-950/30 p-2 rounded break-all border border-red-200 dark:border-red-800">
+                              {selectedRow.attributes["exception.message"]}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Regular Attributes Section */}
+                  <div>
+                    <h4 className="font-medium text-sm mb-2">Attributes</h4>
+                    <div className="space-y-2">
+                      {Object.entries(selectedRow.attributes)
+                        .filter(([key]) => !key.startsWith("exception.")) // Exclude exception attributes
+                        .map(([key, value]) => (
+                          <div key={key} className="">
+                            <div className="text-[11px] font-medium text-muted-foreground mb-1">
+                              {key}
+                            </div>
+                            <div className="text-[11px] font-mono bg-muted p-2 rounded break-all">
+                              {typeof value === "object"
+                                ? JSON.stringify(value, null, 2)
+                                : String(value)}
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
-    </TooltipProvider>
+
+      {/* Editor Selection Modal */}
+      <EditorSelectionModal
+        open={showEditorModal}
+        onSelect={handleEditorSelect}
+        onClose={() => setShowEditorModal(false)}
+      />
+    </div>
   );
 }

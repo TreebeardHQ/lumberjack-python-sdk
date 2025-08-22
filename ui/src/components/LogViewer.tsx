@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { VirtualizedDataTable } from "./logs/virtualized-data-table";
 import type { LogEntry, WebSocketMessage } from "@/types/logs";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 const MAX_LOGS_IN_MEMORY = 50000; // Maximum number of logs to keep in memory
 const LOAD_MORE_BATCH_SIZE = 100; // Number of logs to load when paginating
@@ -160,7 +161,9 @@ export function LogViewer() {
                 }
 
                 // Add new logs to seen set
-                newLogs.forEach((log: LogEntry) => seenLogIds.current.add(log.id));
+                newLogs.forEach((log: LogEntry) =>
+                  seenLogIds.current.add(log.id)
+                );
 
                 // Merge new logs with existing logs and sort by timestamp
                 const allLogs = [...prevLogs, ...newLogs].sort(
@@ -275,28 +278,30 @@ export function LogViewer() {
   }, [isTailing, isConnected, connectWebSocket]);
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden">
-      <div className="flex-shrink-0 px-6 py-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-muted-foreground">
-              🌲 Lumberjack Local development log viewer
-            </p>
+    <TooltipProvider delayDuration={0}>
+      <div className="h-screen flex flex-col overflow-hidden">
+        <div className="flex-shrink-0 px-6 py-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-muted-foreground">
+                🌲 Lumberjack Local development log viewer
+              </p>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div className="flex-1 px-6 pb-6 overflow-hidden">
-        <VirtualizedDataTable
-          data={logs}
-          isConnected={isConnected}
-          isTailing={isTailing}
-          onTailingChange={handleTailingChange}
-          onLoadMore={loadMoreLogs}
-          isLoading={isLoading}
-          hasMore={hasMore}
-        />
+        <div className="flex-1 px-6 pb-6 overflow-hidden">
+          <VirtualizedDataTable
+            data={logs}
+            isConnected={isConnected}
+            isTailing={isTailing}
+            onTailingChange={handleTailingChange}
+            onLoadMore={loadMoreLogs}
+            isLoading={isLoading}
+            hasMore={hasMore}
+          />
+        </div>
       </div>
-    </div>
+    </TooltipProvider>
   );
 }

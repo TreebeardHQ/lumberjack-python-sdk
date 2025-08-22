@@ -236,11 +236,7 @@ class LumberjackConfig:
         
         if self.log_to_stdout is None:
             self.log_to_stdout = True  # Default to console output unless explicitly disabled
-        
-        # Set default local server settings
-        if self.local_server_enabled is None:
-            # Enable local server if not in production environment
-            self.local_server_enabled = self.env != "production"
+
         
         # Set service name for local server
         if self.local_server_service_name is None:

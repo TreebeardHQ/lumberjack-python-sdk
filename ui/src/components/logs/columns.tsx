@@ -1,10 +1,9 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { Button } from "@/components/ui/button";
-import { ArrowUpDown, Code } from "lucide-react";
+import { ArrowUpDown } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
-  TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { format } from "date-fns";
@@ -49,74 +48,7 @@ const stripAnsiCodes = (text: string): string => {
   return text.replace(/\x1b\[[0-9;]*m/g, "");
 };
 
-// Attributes popover content component
-export const AttributesPopoverContent = ({ attributes }: { attributes: Record<string, any> | null }) => {
-  if (!attributes || Object.keys(attributes).length === 0) return null;
-  
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <h4 className="font-medium text-sm">Attributes</h4>
-        <span className="text-[10px] text-muted-foreground/70 uppercase tracking-wide">
-          ESC to close
-        </span>
-      </div>
-      <div className="space-y-1 max-h-64 overflow-auto">
-        {Object.entries(attributes).map(([key, value]) => (
-          <div key={key} className="flex flex-col gap-1">
-            <div className="text-[10px] font-medium text-muted-foreground">
-              {key}
-            </div>
-            <div className="text-[10px] font-mono break-all bg-muted p-1 rounded">
-              {typeof value === "object"
-                ? JSON.stringify(value, null, 2)
-                : String(value)}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
-
-// Function to open file in editor
-const openInEditor = (
-  filePath: string,
-  lineNumber: number | string,
-  editor: "cursor" | "vscode"
-) => {
-  const line =
-    typeof lineNumber === "string" ? parseInt(lineNumber) : lineNumber;
-  if (isNaN(line)) return;
-
-  let command = "";
-  if (editor === "cursor") {
-    command = `cursor://file${filePath}:${line}`;
-  } else if (editor === "vscode") {
-    command = `vscode://file${filePath}:${line}`;
-  }
-
-  if (command) {
-    try {
-      // Use location.href for custom URL schemes to work properly
-      window.location.href = command;
-    } catch (error) {
-      console.error("Failed to open editor:", error);
-      // Fallback: try creating a temporary link and clicking it
-      const link = document.createElement('a');
-      link.href = command;
-      link.style.display = 'none';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    }
-  }
-};
-
-export const createColumns = (
-  editor: "cursor" | "vscode" | null,
-  onEditorNeeded?: () => void
-): ColumnDef<LogEntry>[] => [
+export const createColumns = (): ColumnDef<LogEntry>[] => [
   {
     accessorKey: "service",
     header: "Service",
@@ -127,20 +59,18 @@ export const createColumns = (
       const service = row.getValue("service") as string;
       const colorIndex = hashServiceName(service);
       return (
-        <TooltipProvider delayDuration={0}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div
-                className={`font-medium truncate cursor-default ${serviceColors[colorIndex]}`}
-              >
-                {service}
-              </div>
-            </TooltipTrigger>
-            <TooltipContent className="animate-none">
-              <p>{service}</p>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div
+              className={`font-medium truncate cursor-default ${serviceColors[colorIndex]}`}
+            >
+              {service}
+            </div>
+          </TooltipTrigger>
+          <TooltipContent className="animate-none">
+            <p>{service}</p>
+          </TooltipContent>
+        </Tooltip>
       );
     },
     size: 80,
@@ -196,21 +126,25 @@ export const createColumns = (
     header: "Logger",
     cell: ({ row }) => {
       const attributes = row.original.attributes as Record<string, any>;
-      const loggerName = attributes?.["logger_name"] || attributes?.["tb_rv2_logger_name"] || attributes?.["logger"] || "-";
-      
+      const loggerName =
+        attributes?.["logger_name"] ||
+        attributes?.["tb_rv2_logger_name"] ||
+        attributes?.["logger"] ||
+        "-";
+
       return (
-        <TooltipProvider delayDuration={0}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div className="text-xs truncate cursor-default text-purple-600">
-                {loggerName === "-" ? "-" : loggerName.split('.').pop() || loggerName}
-              </div>
-            </TooltipTrigger>
-            <TooltipContent className="animate-none">
-              <p>{loggerName}</p>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div className="text-xs truncate cursor-default text-purple-600">
+              {loggerName === "-"
+                ? "-"
+                : loggerName.split(".").pop() || loggerName}
+            </div>
+          </TooltipTrigger>
+          <TooltipContent className="animate-none">
+            <p>{loggerName}</p>
+          </TooltipContent>
+        </Tooltip>
       );
     },
     size: 56,
@@ -230,76 +164,13 @@ export const createColumns = (
       const hasException =
         exceptionType || exceptionMessage || exceptionStacktrace;
 
-      // Check for code file and line information
-      const filePath = attributes?.["code.file.path"];
-      const lineNumber = attributes?.["code.line.number"];
-      const hasCodeInfo = filePath && lineNumber && lineNumber !== false;
-
-      const handleCodeClick = () => {
-        if (!hasCodeInfo) return;
-
-        if (!editor) {
-          onEditorNeeded?.();
-          return;
-        }
-
-        openInEditor(filePath, lineNumber, editor);
-      };
-
       return (
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-2">
-            <div className="break-all flex-1">
-              {message}
-            </div>
-
-            {hasCodeInfo && (
-              <TooltipProvider delayDuration={0}>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleCodeClick();
-                      }}
-                      className="h-6 w-6 p-0"
-                    >
-                      <Code className="h-3 w-3" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent className="text-xs px-2 py-1">
-                    <p>{filePath.split('/').pop()}:{lineNumber} - Open in editor</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            )}
-          </div>
-
-          {hasException && (
-            <div className="mt-2 p-2 bg-red-50 dark:bg-red-950/30 border-l-2 border-red-200 dark:border-red-800 rounded-r">
-              {exceptionType && (
-                <div className="font-medium text-red-700 dark:text-red-300 mb-1">
-                  {exceptionType}
-                </div>
-              )}
-              {exceptionMessage && (
-                <div className="text-red-600 dark:text-red-400 mb-2">
-                  {exceptionMessage}
-                </div>
-              )}
-              {exceptionStacktrace && (
-                <details className="mt-1">
-                  <summary className="cursor-pointer text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 font-medium">
-                    Stack Trace
-                  </summary>
-                  <pre className="mt-1 text-[9px] font-mono text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/50 p-1 rounded overflow-x-auto whitespace-pre-wrap">
-                    {exceptionStacktrace}
-                  </pre>
-                </details>
-              )}
-            </div>
+        <div className="break-all">
+          {message}
+          {hasException && exceptionMessage && (
+            <span className="text-red-600 dark:text-red-400 font-medium ml-2">
+              - {exceptionMessage}
+            </span>
           )}
         </div>
       );
@@ -333,4 +204,4 @@ export const createColumns = (
 ];
 
 // Default export for backwards compatibility
-export const columns = createColumns(null);
+export const columns = createColumns();
