@@ -22,6 +22,6 @@ export interface ServicesResponse {
 }
 
 export interface WebSocketMessage {
-  type: 'new_log' | 'initial_logs' | 'ping';
-  data?: LogEntry | LogEntry[];
+  type: 'new_log' | 'initial_logs' | 'ping' | 'stats';
+  data?: LogEntry | LogEntry[] | { total_logs: number };
 }

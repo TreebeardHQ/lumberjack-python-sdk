@@ -229,6 +229,18 @@ async def websocket_logs(websocket: WebSocket):
         # Send initial recent logs
         await connection_manager.send_initial_logs(websocket)
         
+        # Send initial total count for better UX
+        try:
+            db = get_database()
+            total_logs = db.get_log_count()
+            stats_message = json.dumps({
+                "type": "stats",
+                "data": {"total_logs": total_logs}
+            })
+            await websocket.send_text(stats_message)
+        except Exception as e:
+            fallback_logger.debug(f"Failed to send initial stats: {e}")
+        
         # Keep connection alive and handle any messages
         while True:
             try:
@@ -285,6 +297,48 @@ async def get_logs(
         
     except Exception as e:
         fallback_logger.error(f"Error getting logs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/logs/before")
+async def get_logs_before(
+    before_timestamp: int = Query(..., description="Get logs before this timestamp"),
+    limit: int = Query(100, ge=1, le=1000),
+    service: Optional[str] = Query(None),
+    level: Optional[str] = Query(None),
+    search: Optional[str] = Query(None)
+):
+    """Get logs before a specific timestamp for cursor-based pagination."""
+    try:
+        db = get_database()
+        logs = db.get_logs_before_timestamp(
+            before_timestamp=before_timestamp,
+            limit=limit,
+            service=service,
+            level=level,
+            search_query=search
+        )
+        
+        # Check if there are more logs before the oldest returned log
+        has_more = False
+        if logs:
+            oldest_log_timestamp = min(log.timestamp for log in logs)
+            earlier_count = db.get_log_count(
+                service=service,
+                level=level,
+                before_timestamp=oldest_log_timestamp
+            )
+            has_more = earlier_count > 0
+        
+        return {
+            "logs": [log.to_dict() for log in logs],
+            "limit": limit,
+            "has_more": has_more,
+            "before_timestamp": before_timestamp
+        }
+        
+    except Exception as e:
+        fallback_logger.error(f"Error getting logs before timestamp: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

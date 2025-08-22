@@ -1,10 +1,5 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { Button } from "@/components/ui/button";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import { ArrowUpDown, Code } from "lucide-react";
 import {
   Tooltip,
@@ -52,6 +47,36 @@ const serviceColors = [
 // Function to strip ANSI color codes from log messages
 const stripAnsiCodes = (text: string): string => {
   return text.replace(/\x1b\[[0-9;]*m/g, "");
+};
+
+// Attributes popover content component
+export const AttributesPopoverContent = ({ attributes }: { attributes: Record<string, any> | null }) => {
+  if (!attributes || Object.keys(attributes).length === 0) return null;
+  
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <h4 className="font-medium text-sm">Attributes</h4>
+        <span className="text-[10px] text-muted-foreground/70 uppercase tracking-wide">
+          ESC to close
+        </span>
+      </div>
+      <div className="space-y-1 max-h-64 overflow-auto">
+        {Object.entries(attributes).map(([key, value]) => (
+          <div key={key} className="flex flex-col gap-1">
+            <div className="text-[10px] font-medium text-muted-foreground">
+              {key}
+            </div>
+            <div className="text-[10px] font-mono break-all bg-muted p-1 rounded">
+              {typeof value === "object"
+                ? JSON.stringify(value, null, 2)
+                : String(value)}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 };
 
 // Function to open file in editor
@@ -197,7 +222,6 @@ export const createColumns = (
       const rawMessage = row.getValue("message") as string;
       const message = stripAnsiCodes(rawMessage);
       const attributes = row.original.attributes as Record<string, any>;
-      const hasAttributes = attributes && Object.keys(attributes).length > 0;
 
       // Check for exception information in attributes
       const exceptionType = attributes?.["exception.type"];
@@ -225,38 +249,9 @@ export const createColumns = (
       return (
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-2">
-            <Popover>
-              <PopoverTrigger asChild>
-                <div
-                  className={`break-all cursor-pointer flex-1 ${
-                    hasAttributes ? "hover:bg-muted/50 rounded px-1 py-0.5" : ""
-                  }`}
-                >
-                  {message}
-                </div>
-              </PopoverTrigger>
-              {hasAttributes && (
-                <PopoverContent className="w-80">
-                  <div className="space-y-2">
-                    <h4 className="font-medium text-sm">Attributes</h4>
-                    <div className="space-y-1 max-h-64 overflow-auto">
-                      {Object.entries(attributes).map(([key, value]) => (
-                        <div key={key} className="flex flex-col gap-1">
-                          <div className="text-[10px] font-medium text-muted-foreground">
-                            {key}
-                          </div>
-                          <div className="text-[10px] font-mono break-all bg-muted p-1 rounded">
-                            {typeof value === "object"
-                              ? JSON.stringify(value, null, 2)
-                              : String(value)}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </PopoverContent>
-              )}
-            </Popover>
+            <div className="break-all flex-1">
+              {message}
+            </div>
 
             {hasCodeInfo && (
               <TooltipProvider delayDuration={0}>
@@ -265,7 +260,10 @@ export const createColumns = (
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={handleCodeClick}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleCodeClick();
+                      }}
                       className="h-6 w-6 p-0"
                     >
                       <Code className="h-3 w-3" />
@@ -319,7 +317,8 @@ export const createColumns = (
 
       return (
         <button
-          onClick={() => {
+          onClick={(e) => {
+            e.stopPropagation();
             table.setGlobalFilter(traceId);
           }}
           className="text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"

@@ -258,11 +258,68 @@ class LogDatabase:
             fallback_logger.error(f"Failed to get services: {e}")
             return []
     
+    def get_logs_before_timestamp(
+        self, 
+        before_timestamp: int,
+        limit: int = 100,
+        service: Optional[str] = None,
+        level: Optional[str] = None,
+        search_query: Optional[str] = None
+    ) -> List[LogEntry]:
+        """
+        Retrieve logs before a specific timestamp (for cursor-based pagination).
+        
+        Args:
+            before_timestamp: Get logs before this timestamp
+            limit: Maximum number of logs to return
+            service: Filter by service name
+            level: Filter by log level
+            search_query: Search in message content
+            
+        Returns:
+            List of log entries ordered by timestamp descending
+        """
+        try:
+            with self._get_connection() as conn:
+                conditions = ["timestamp < ?"]
+                params = [before_timestamp]
+                
+                if service:
+                    conditions.append("service = ?")
+                    params.append(service)
+                
+                if level:
+                    conditions.append("level = ?")
+                    params.append(level)
+                
+                if search_query:
+                    conditions.append("message LIKE ?")
+                    params.append(f"%{search_query}%")
+                
+                where_clause = "WHERE " + " AND ".join(conditions)
+                
+                query = f"""
+                    SELECT * FROM logs 
+                    {where_clause}
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                """
+                params.append(limit)
+                
+                cursor = conn.execute(query, params)
+                rows = cursor.fetchall()
+                
+                return [self._row_to_log_entry(row) for row in rows]
+        except Exception as e:
+            fallback_logger.error(f"Failed to get logs before timestamp: {e}")
+            raise
+    
     def get_log_count(
         self, 
         service: Optional[str] = None,
         level: Optional[str] = None,
-        since_timestamp: Optional[int] = None
+        since_timestamp: Optional[int] = None,
+        before_timestamp: Optional[int] = None
     ) -> int:
         """Get count of logs with optional filtering."""
         try:
@@ -281,6 +338,10 @@ class LogDatabase:
                 if since_timestamp:
                     conditions.append("timestamp > ?")
                     params.append(since_timestamp)
+                    
+                if before_timestamp:
+                    conditions.append("timestamp < ?")
+                    params.append(before_timestamp)
                 
                 where_clause = ""
                 if conditions:
