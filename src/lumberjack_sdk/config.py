@@ -9,14 +9,10 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
 # Forward declarations for exporters
-try:
-    from opentelemetry.sdk._logs.export import LogExporter
-    from opentelemetry.sdk.trace.export import SpanExporter
-    from opentelemetry.sdk.metrics.export import MetricExporter
-except ImportError:
-    LogExporter = Any  # type: ignore[misc,assignment]
-    SpanExporter = Any  # type: ignore[misc,assignment]
-    MetricExporter = Any  # type: ignore[misc,assignment]
+from opentelemetry.sdk._logs.export import LogExporter
+from opentelemetry.sdk.trace.export import SpanExporter
+from opentelemetry.sdk.metrics.export import MetricExporter
+
 
 
 @dataclass

@@ -19,6 +19,13 @@ except ImportError as e:
 
 from ..internal_utils.fallback_logger import fallback_logger
 
+def truncate_value(value: Any, max_length: int = 1000) -> str:
+    """Truncate long values to prevent overwhelming output."""
+    str_value = str(value)
+    if len(str_value) > max_length:
+        return str_value[:max_length] + "... (truncated)"
+    return str_value
+
 # Initialize MCP server
 mcp = FastMCP("Lumberjack Local Server")
 
@@ -80,18 +87,46 @@ def recent_logs(
     if not logs:
         return "No logs found."
     
-    # Format as readable text
+    # Format as readable text with all attributes
     output = []
     for log in logs:
         timestamp = datetime.fromtimestamp(log["timestamp"] / 1_000_000_000)
         time_str = timestamp.strftime("%H:%M:%S.%f")[:-3]
         
-        line = f"[{time_str}] {log['level']:8} {log['service']:15} {log['message']}"
+        # Base log line
+        lines = [f"[{time_str}] {log['level']:8} {log['service']:15} {log['message']}"]
+        
+        # Add trace information if present
         if log.get("trace_id"):
-            line += f" (trace:{log['trace_id'][:8]})"
-        output.append(line)
+            lines.append(f"  Trace ID = {log['trace_id']}")
+        if log.get("span_id"):
+            lines.append(f"  Span ID = {log['span_id']}")
+        
+        # Add all custom attributes (excluding internal and redundant attributes)
+        if log.get("attributes"):
+            # Filter out tb_rv2_* attributes and redundant otel IDs (already shown above)
+            filtered_attrs = {
+                k: v for k, v in log["attributes"].items() 
+                if not k.startswith("tb_rv2_") and k not in ["otelSpanID", "otelTraceID"]
+            }
+            
+            if filtered_attrs:
+                lines.append("  Attributes:")
+                for key, value in filtered_attrs.items():
+                    # Don't truncate exception-related fields (stack traces, etc.)
+                    exception_fields = ['exception', 'stack', 'trace', 'traceback', 'error', 'stacktrace']
+                    should_truncate = not any(field in key.lower() for field in exception_fields)
+                    
+                    if should_truncate:
+                        display_value = truncate_value(value, 1000)
+                    else:
+                        display_value = str(value)
+                        
+                    lines.append(f"    {key} = {display_value}")
+        
+        output.append("\n".join(lines))
     
-    return "\n".join(output)
+    return "\n\n".join(output)
 
 
 @mcp.tool()
@@ -99,17 +134,15 @@ def search_logs(
     query: str,
     service: Optional[str] = None,
     level: Optional[str] = None,
-    trace_id: Optional[str] = None,
     limit: int = 50
 ) -> str:
     """
     Search logs by message content or trace ID.
     
     Args:
-        query: Search term to find in log messages
+        query: Search term to find in log messages or trace ID (supports partial matches)
         service: Filter by service name (optional)
         level: Filter by log level: DEBUG, INFO, WARNING, ERROR, CRITICAL (optional)
-        trace_id: Search for specific trace ID (optional)
         limit: Number of logs to return (default: 50, max: 200)
     
     Returns:
@@ -124,12 +157,7 @@ def search_logs(
     if level:
         params["level"] = level
     
-    # For trace_id search, we search in the query parameter and also get more logs to filter
-    if trace_id:
-        params["search"] = trace_id
-        params["limit"] = 1000  # Get more logs to search through
-    else:
-        params["search"] = query
+    params["search"] = query
     
     # Call the local server API
     response = call_local_server("/api/logs", params)
@@ -139,32 +167,70 @@ def search_logs(
     
     logs = response.get("logs", [])
     
-    # If searching by trace_id, do additional filtering
-    if trace_id:
+    # Check if this might be a trace_id search (hex string pattern)
+    # and do additional filtering if needed
+    import re
+    is_trace_search = bool(re.match(r'^[a-fA-F0-9]+$', query)) and len(query) >= 6
+    
+    if is_trace_search:
+        # Filter logs by trace_id for better accuracy
         filtered_logs = []
         for log in logs:
-            if log.get("trace_id") and trace_id in log["trace_id"]:
+            if log.get("trace_id") and query.lower() in log["trace_id"].lower():
                 filtered_logs.append(log)
-        logs = filtered_logs[:limit]
-        search_term = f"trace ID '{trace_id}'"
+        
+        # If we found trace matches, use them; otherwise keep original results
+        if filtered_logs:
+            logs = filtered_logs[:limit]
+            search_term = f"trace ID containing '{query}'"
+        else:
+            search_term = f"'{query}'"
     else:
         search_term = f"'{query}'"
     
     if not logs:
         return f"No logs found matching {search_term}"
     
-    # Format as readable text
+    # Format as readable text with all attributes
     output = [f"Found {len(logs)} logs matching {search_term}:\n"]
     for log in logs:
         timestamp = datetime.fromtimestamp(log["timestamp"] / 1_000_000_000)
         time_str = timestamp.strftime("%H:%M:%S.%f")[:-3]
         
-        line = f"[{time_str}] {log['level']:8} {log['service']:15} {log['message']}"
+        # Base log line
+        lines = [f"[{time_str}] {log['level']:8} {log['service']:15} {log['message']}"]
+        
+        # Add trace information if present
         if log.get("trace_id"):
-            line += f" (trace:{log['trace_id'][:8]})"
-        output.append(line)
+            lines.append(f"  Trace ID = {log['trace_id']}")
+        if log.get("span_id"):
+            lines.append(f"  Span ID = {log['span_id']}")
+        
+        # Add all custom attributes (excluding internal and redundant attributes)
+        if log.get("attributes"):
+            # Filter out tb_rv2_* attributes and redundant otel IDs (already shown above)
+            filtered_attrs = {
+                k: v for k, v in log["attributes"].items() 
+                if not k.startswith("tb_rv2_") and k not in ["otelSpanID", "otelTraceID"]
+            }
+            
+            if filtered_attrs:
+                lines.append("  Attributes:")
+                for key, value in filtered_attrs.items():
+                    # Don't truncate exception-related fields (stack traces, etc.)
+                    exception_fields = ['exception', 'stack', 'trace', 'traceback', 'error', 'stacktrace']
+                    should_truncate = not any(field in key.lower() for field in exception_fields)
+                    
+                    if should_truncate:
+                        display_value = truncate_value(value, 1000)
+                    else:
+                        display_value = str(value)
+                        
+                    lines.append(f"    {key} = {display_value}")
+        
+        output.append("\n".join(lines))
     
-    return "\n".join(output)
+    return "\n\n".join(output)
 
 
 @mcp.tool()

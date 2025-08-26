@@ -213,7 +213,9 @@ class LogDatabase:
                     params.append(level)
                 
                 if search_query:
-                    conditions.append("message LIKE ?")
+                    # Search in both message and trace_id fields
+                    conditions.append("(message LIKE ? OR trace_id LIKE ?)")
+                    params.append(f"%{search_query}%")
                     params.append(f"%{search_query}%")
                 
                 if since_timestamp:
@@ -293,7 +295,9 @@ class LogDatabase:
                     params.append(level)
                 
                 if search_query:
-                    conditions.append("message LIKE ?")
+                    # Search in both message and trace_id fields
+                    conditions.append("(message LIKE ? OR trace_id LIKE ?)")
+                    params.append(f"%{search_query}%")
                     params.append(f"%{search_query}%")
                 
                 where_clause = "WHERE " + " AND ".join(conditions)
