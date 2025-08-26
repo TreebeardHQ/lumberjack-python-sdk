@@ -1,29 +1,33 @@
-# Lumberjack Python SDK
+# Lumberjack
 
-Lumberjack is a powerful Python observability library that provides comprehensive logging, tracing, and metrics collection with seamless OpenTelemetry integration. Built for modern Python applications, it offers both cloud-hosted and local development capabilities.
+Lumberjack is the best logging library for local development, giving both you and Claude and Cursor first class access to your logs via a unified UI and a local MCP server. It's fully otel compatible, so when you're ready for production observability, you can use the lumberjack SDK with basically whatever tool you want.
+
+[![Local log dashboard](./docs/images/local_log_server.png)]
 
 ## Why Use Lumberjack?
 
 ### 🚀 **Core Features**
 
-- **Complete Observability**: Logs, traces, and metrics in one unified SDK
-- **OpenTelemetry Native**: Built on OpenTelemetry with support for custom exporters
-- **Local Development**: Built-in local server with beautiful web UI for development
+- **Claude Code Integration**: Give claude access to your local logs without giving up control of your dev server
+- **Local Development**: Built-in local server with beautiful web UI for development. Collect logs across multiple services running locally. Search and filter easily.
+- **Complete Observability**: Automatically instruments tracing for you.
+- **OpenTelemetry Native**: Built on OpenTelemetry with support for custom exporters for logs, metrics and traces.
 - **Framework Support**: Native integrations for Flask, FastAPI, and Django
 - **Zero-Config Tracing**: Automatic trace context propagation across your application
-- **Intelligent Batching**: Efficient log forwarding with configurable batching strategies
-- **Claude Code Integration**: AI-powered log analysis and debugging with MCP integration
-
-### 🎯 **Perfect For**
-
-- **Local Development**: Rich debugging experience with instant log visualization
-- **Production Monitoring**: Scalable log forwarding to any backend with custom exporters
-- **Microservices**: Distributed tracing across service boundaries
-- **AI-Assisted Debugging**: Query and analyze logs with Claude Code
+- **Local-only mode and fully secure**: In production, the SDK is a no-op unless configured to export data. No data is ever sent to a remote server that you don't explicitly configure.
 
 ## Get Started
 
-### Installation
+### 1. Installation
+
+**Recommended: Using uv (fastest)**
+
+```bash
+# Basic installation with local development server
+uv add 'lumberjack_sdk[local-server]'
+```
+
+**Using pip**
 
 ```bash
 # Basic installation
@@ -33,7 +37,7 @@ pip install lumberjack_sdk
 pip install 'lumberjack_sdk[local-server]'
 ```
 
-### Quick Setup
+### 2. Quick Setup
 
 #### Easiest: AI-Powered Instrumentation
 
@@ -41,29 +45,41 @@ The fastest way to get started is to let Claude Code automatically instrument yo
 
 ```bash
 # 1. Install Lumberjack with local server support
-pip install 'lumberjack_sdk[local-server]'
+uv add 'lumberjack_sdk[local-server]'
 
 # 2. Run the setup command (installs MCP integration + instruments your app)
-lumberjack claude init
+uv run lumberjack claude init
+# or: lumberjack claude init (if installed with pip)
 # This will:
 # - Set up Claude Code MCP integration
 # - Prompt to automatically instrument your application
 # - Add Lumberjack SDK to your code with proper configuration
 ```
 
+[!NOTE]
+
+> You must add `LUMBERJACK_LOCAL_SERVERED_ENABLED=true` to your local environment (dotenv or whatever) for logs to be forwarded by the SDK.
+
 After running `lumberjack claude init`, Claude Code will:
+
 - 🔍 **Analyze your codebase** to detect Flask, FastAPI, Django, or vanilla Python
 - 📝 **Add Lumberjack initialization** to the right file with proper configuration
 - 🏗️ **Add framework instrumentation** if applicable
 - 📦 **Update your dependencies** (requirements.txt, pyproject.toml, etc.)
 
 Then simply:
-```bash
-# Start the local development server  
-lumberjack serve
 
-# Run your application - logs will appear in the web UI
+```bash
+# Start the local development server
+uv run lumberjack serve
+# or: lumberjack serve (if installed with pip)
+
+# Run your application - logs will appear in the web UI.
 ```
+
+[!TIP]
+
+> You can just leave this server running in a tab. The SDK will auto-discover it locally. Also, if you forget, Claude can start it for you
 
 #### Manual Setup for Local Development
 
@@ -71,7 +87,8 @@ If you prefer manual setup:
 
 ```bash
 # 1. Start the local development server
-lumberjack serve
+uv run lumberjack serve
+# or: lumberjack serve (if installed with pip)
 
 # 2. Add to your Python app
 ```
@@ -86,9 +103,6 @@ Lumberjack.init(
     # Local server auto-discovery - no endpoint needed!
 )
 
-# Start logging
-Log.info("Application started", version="1.0.0")
-Log.debug("Debug info", user_count=42)
 
 try:
     # Your application logic
@@ -98,27 +112,17 @@ except Exception as e:
     Log.error("Operation failed", error=str(e), exc_info=True)
 ```
 
-#### For Production
-
-```python
-from lumberjack_sdk import Lumberjack, Log
-
-# Initialize for production
-Lumberjack.init(
-    project_name="my-awesome-app",
-    api_key=os.environ["LUMBERJACK_API_KEY"],
-    endpoint="https://api.trylumberjack.com/logs/batch",
-    env="production"
-)
-
-Log.info("Production app started")
-```
-
 ## Framework Support
 
 > 💡 **Tip**: Run `lumberjack claude init` to automatically detect your framework and add the appropriate instrumentation code below!
 
 ### Flask
+
+```bash
+# Install with Flask support
+uv add 'lumberjack_sdk[flask]'
+# or: pip install 'lumberjack_sdk[flask]'
+```
 
 ```python
 from flask import Flask
@@ -141,6 +145,12 @@ def get_user(user_id):
 
 ### FastAPI
 
+```bash
+# Install with FastAPI support
+uv add 'lumberjack_sdk[fastapi]'
+# or: pip install 'lumberjack_sdk[fastapi]'
+```
+
 ```python
 from fastapi import FastAPI
 from lumberjack_sdk import Lumberjack, LumberjackFastAPI, Log
@@ -161,6 +171,12 @@ async def get_user(user_id: str):
 ```
 
 ### Django
+
+```bash
+# Install with Django support
+uv add 'lumberjack_sdk[django]'
+# or: pip install 'lumberjack_sdk[django]'
+```
 
 ```python
 # settings.py
@@ -225,7 +241,7 @@ otlp_span_exporter = OTLPSpanExporter(
 )
 
 otlp_log_exporter = OTLPLogExporter(
-    endpoint="http://otel-collector:4317", 
+    endpoint="http://otel-collector:4317",
     insecure=True
 )
 
@@ -234,60 +250,6 @@ Lumberjack.init(
     custom_span_exporter=otlp_span_exporter,
     custom_log_exporter=otlp_log_exporter,
 )
-```
-
-## Advanced Features
-
-### Distributed Tracing
-
-```python
-from lumberjack_sdk import start_span, Log
-
-# Manual span creation
-with start_span("payment_processing") as span:
-    Log.info("Processing payment", amount=100)
-    
-    with start_span("validate_card") as child_span:
-        Log.debug("Validating card")
-        # span context automatically propagated
-        
-    Log.info("Payment completed")
-```
-
-### Metrics Collection
-
-```python
-from lumberjack_sdk import create_counter, create_histogram
-
-# Create metrics
-request_counter = create_counter(
-    "http_requests_total",
-    description="Total HTTP requests"
-)
-
-response_time = create_histogram(
-    "http_request_duration_seconds",
-    description="HTTP request duration"
-)
-
-# Use metrics
-request_counter.add(1, {"method": "GET", "route": "/users"})
-response_time.record(0.142, {"method": "GET", "status": "200"})
-```
-
-### Error Tracking
-
-```python
-from lumberjack_sdk import Log
-
-try:
-    risky_operation()
-except Exception as e:
-    # Automatic exception capture with stack traces
-    Log.error("Operation failed", 
-              exc_info=True,  # Captures full stack trace
-              user_id="123",
-              operation="data_processing")
 ```
 
 ## Configuration Reference
@@ -300,40 +262,39 @@ Lumberjack.init(
     project_name="my-app",           # Required: Service identifier
     api_key="your-api-key",          # For production use
     env="production",                # Environment tag
-    
+
     # Endpoints
     endpoint="https://api.company.com/logs/batch",     # Logs endpoint
-    spans_endpoint="https://api.company.com/spans/batch", # Traces endpoint  
+    spans_endpoint="https://api.company.com/spans/batch", # Traces endpoint
     metrics_endpoint="https://api.company.com/metrics", # Metrics endpoint
-    objects_endpoint="https://api.company.com/objects/register", # Objects endpoint
-    
+
     # Local development
     local_server_enabled=True,       # Enable local server integration
-    
+
     # Performance tuning
     batch_size=500,                  # Logs per batch
     batch_age=30.0,                  # Max seconds before sending
     flush_interval=30.0,             # Periodic flush interval
-    
+
     # Capture settings
     capture_stdout=True,             # Capture print() statements
     capture_python_logger=True,      # Capture logging.* calls
     python_logger_level="INFO",      # Minimum level to capture
     python_logger_name=None,         # Specific logger name to capture
-    
+
     # Code snippets
     code_snippet_enabled=True,       # Include code context in logs
     code_snippet_context_lines=5,    # Lines of context
     code_snippet_max_frames=20,      # Max stack frames
-    
+
     # Debugging
     debug_mode=False,                # Enable debug output
     log_to_stdout=True,              # Also log to console
     stdout_log_level="INFO",         # Console log level
-    
+
     # Custom exporters
     custom_log_exporter=None,        # Custom log exporter
-    custom_span_exporter=None,       # Custom span exporter  
+    custom_span_exporter=None,       # Custom span exporter
     custom_metrics_exporter=None,    # Custom metrics exporter
 )
 ```
@@ -363,14 +324,16 @@ Enhance your debugging experience with AI-powered log analysis:
 
 ```bash
 # Setup Claude Code integration
-lumberjack claude init
+uv run lumberjack claude init
+# or: lumberjack claude init (if installed with pip)
 
 # Start local server
-lumberjack serve
+uv run lumberjack serve
+# or: lumberjack serve (if installed with pip)
 
 # Now ask Claude Code natural language questions:
 # "Show me recent error logs"
-# "Find all logs with trace ID abc123"  
+# "Find all logs with trace ID abc123"
 # "What's causing the timeout errors?"
 ```
 
@@ -379,7 +342,7 @@ lumberjack serve
 Check out the [examples directory](./examples) for complete sample applications:
 
 - [Flask Basic Example](./examples/flask_basic)
-- [FastAPI Basic Example](./examples/fastapi_basic)  
+- [FastAPI Basic Example](./examples/fastapi_basic)
 - [Django Basic Example](./examples/django_basic)
 - [Metrics Example](./examples/metrics_example.py)
 
@@ -389,6 +352,5 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Support
 
-- **Documentation**: [docs.lumberjack.dev](https://docs.lumberjack.dev)
-- **Issues**: [GitHub Issues](https://github.com/trylumberjack/lumberjack-python-sdk/issues)
-- **Community**: [Discord](https://discord.gg/lumberjack)
+- **Documentation**: [trylumberjack.dev/docs](https://trylumberjack.dev/docs)
+- **Issues**: [GitHub Issues](https://github.com/TreebeardHQ/lumberjack-python-sdk/issues)
