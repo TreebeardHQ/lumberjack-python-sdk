@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import socket
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -124,7 +125,6 @@ def serve_command(args: argparse.Namespace) -> None:
 def claude_install_command(args: argparse.Namespace) -> None:
     """Handle the 'claude install' command to instrument the SDK with Claude's help."""
     try:
-        import subprocess
         from pathlib import Path
         
         print("🤖 Preparing to instrument your application with Lumberjack SDK...")
@@ -217,7 +217,6 @@ Make the necessary changes to properly instrument my application for local log c
 def claude_remove_command(args: argparse.Namespace) -> None:
     """Handle the 'claude remove' command to remove MCP integration."""
     try:
-        import subprocess
         print("🤖 Removing Lumberjack MCP integration from Claude Code...")
         
         # Try to find claude command in common locations
@@ -271,7 +270,6 @@ def claude_remove_command(args: argparse.Namespace) -> None:
 def claude_init_command(args: argparse.Namespace) -> None:
     """Handle the 'claude init' command to setup MCP integration."""
     try:
-        import subprocess
         print("🤖 Setting up Claude Code MCP integration...")
         
         # Check if lumberjack-mcp command is available
@@ -383,6 +381,95 @@ def claude_init_command(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def cursor_init_command(args: argparse.Namespace) -> None:
+    """Handle the 'cursor init' command to setup MCP integration with Cursor."""
+    try:
+        print("🎯 Setting up Cursor MCP integration...")
+        
+        # Check if lumberjack-mcp command is available
+        try:
+            subprocess.run(["which", "lumberjack-mcp"], check=True, capture_output=True)
+        except subprocess.CalledProcessError:
+            print("❌ lumberjack-mcp command not found.")
+            print("Make sure you've installed lumberjack with: pip install 'lumberjack_sdk[local-server]'")
+            sys.exit(1)
+        
+        # Determine config file path
+        if args.global_config:
+            config_path = os.path.expanduser("~/.cursor/mcp.json")
+            scope = "global"
+        else:
+            config_path = os.path.join(os.getcwd(), ".cursor", "mcp.json")
+            scope = "project"
+        
+        print(f"🔧 Configuring MCP for {scope} use: {config_path}")
+        
+        # Create directory if it doesn't exist
+        config_dir = os.path.dirname(config_path)
+        if not os.path.exists(config_dir):
+            try:
+                os.makedirs(config_dir)
+                print(f"📁 Created directory: {config_dir}")
+            except OSError as e:
+                print(f"❌ Failed to create directory {config_dir}: {e}")
+                sys.exit(1)
+        
+        # Load existing config or create new one
+        mcp_config = {"mcpServers": {}}
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    mcp_config = json.load(f)
+                    if "mcpServers" not in mcp_config:
+                        mcp_config["mcpServers"] = {}
+                print(f"📄 Loaded existing config from {config_path}")
+            except (json.JSONDecodeError, OSError) as e:
+                print(f"⚠️  Warning: Could not read existing config: {e}")
+                print("📝 Creating new configuration...")
+                mcp_config = {"mcpServers": {}}
+        
+        # Add or update lumberjack MCP server
+        mcp_config["mcpServers"]["lumberjack"] = {
+            "command": "lumberjack-mcp"
+        }
+        
+        # Write the config back
+        try:
+            with open(config_path, 'w') as f:
+                json.dump(mcp_config, f, indent=2)
+            print(f"✅ Successfully configured Lumberjack MCP server!")
+        except OSError as e:
+            print(f"❌ Failed to write config file: {e}")
+            sys.exit(1)
+        
+        # Display next steps
+        print(f"\n📋 Next steps:")
+        if scope == "project":
+            print("1. Restart Cursor in this project directory")
+            print("2. The MCP server will be available as 'Project Managed' in Cursor")
+        else:
+            print("1. Restart Cursor")
+            print("2. The MCP server will be available globally")
+        
+        print("3. Start the Lumberjack server: lumberjack serve")
+        print("4. Use Cursor to interact with your logs!")
+        
+        print("\n🛠️  Available MCP tools:")
+        print("  • recent_logs - Get recent logs (filter by service/level)")
+        print("  • search_logs - Search logs by message or trace ID")
+        print("  • list_services - List all services with log counts")
+        print("  • start_server - Start the Lumberjack server")
+        
+        print(f"\n📍 Configuration saved to: {config_path}")
+        
+    except Exception as e:
+        print(f"❌ Failed to setup Cursor integration: {e}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
 def main() -> None:
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -457,6 +544,27 @@ def main() -> None:
         help="Remove MCP integration from Claude Code"
     )
     
+    # Cursor init command
+    cursor_parser = subparsers.add_parser(
+        "cursor",
+        help="Cursor editor integration commands"
+    )
+    cursor_subparsers = cursor_parser.add_subparsers(
+        dest="cursor_command",
+        help="Cursor editor commands"
+    )
+    
+    cursor_init_parser = cursor_subparsers.add_parser(
+        "init",
+        help="Setup MCP integration with Cursor editor"
+    )
+    cursor_init_parser.add_argument(
+        "--global",
+        action="store_true",
+        dest="global_config",
+        help="Configure MCP globally (~/.cursor/mcp.json) instead of project-specific (.cursor/mcp.json)"
+    )
+    
     # Parse arguments
     args = parser.parse_args()
     
@@ -476,6 +584,12 @@ def main() -> None:
             claude_remove_command(args)
         else:
             claude_parser.print_help()
+            sys.exit(1)
+    elif args.command == "cursor":
+        if args.cursor_command == "init":
+            cursor_init_command(args)
+        else:
+            cursor_parser.print_help()
             sys.exit(1)
     else:
         parser.print_help()
