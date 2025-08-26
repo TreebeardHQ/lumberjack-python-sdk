@@ -1,11 +1,11 @@
 from functools import wraps
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Dict, Optional
 
 from .span import end_span, record_exception_on_span, start_span
-from .spans import SpanKind, SpanStatus, SpanStatusCode
+from opentelemetry.trace import SpanKind, Status as SpanStatus, StatusCode as SpanStatusCode # type: ignore[attr-defined]
 
 
-def lumberjack_trace(name: Optional[str] = None):
+def lumberjack_trace(name: Optional[str] = None) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """
     Decorator to clear contextvars after function completes.
     Usage:
@@ -20,9 +20,9 @@ def lumberjack_trace(name: Optional[str] = None):
         name: Optional name for the trace
     """
 
-    def decorator(func: Callable):
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @wraps(func)
-        def wrapper(*args, **kwargs) -> Any:
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
             # Use span name from decorator or function name
             span_name = name or func.__name__
 
@@ -36,16 +36,17 @@ def lumberjack_trace(name: Optional[str] = None):
                 )
 
                 # Set function attributes
-                span.set_attribute("function.name", func.__name__)
-                span.set_attribute("function.module", func.__module__)
+                if span:
+                    span.set_attribute("function.name", func.__name__)
+                    span.set_attribute("function.module", func.__module__)
 
-                # Set argument attributes (be careful with sensitive data)
-                if args:
-                    span.set_attribute("function.args_count", len(args))
-                if kwargs:
-                    span.set_attribute("function.kwargs_count", len(kwargs))
+                    # Set argument attributes (be careful with sensitive data)
+                    if args:
+                        span.set_attribute("function.args_count", len(args))
+                    if kwargs:
+                        span.set_attribute("function.kwargs_count", len(kwargs))
                     # Only log non-sensitive kwargs
-                    safe_kwargs = {
+                    safe_kwargs: Dict[str, Any] = {
                         k: v for k, v in kwargs.items()
                         if not any(
                             sensitive in k.lower()
@@ -59,7 +60,7 @@ def lumberjack_trace(name: Optional[str] = None):
                 result = func(*args, **kwargs)
 
                 # Set result attributes
-                if result is not None:
+                if result is not None and span:
                     span.set_attribute("function.result_type",
                                        type(result).__name__)
                     # Only log simple result types

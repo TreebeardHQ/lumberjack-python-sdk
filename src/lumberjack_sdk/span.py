@@ -1,13 +1,16 @@
 """
 Span API for OpenTelemetry-compliant distributed tracing.
 """
-import traceback
 from contextlib import contextmanager
-from typing import Any, Dict, Generator, Optional
+from typing import Any, Dict, Generator, Optional, cast
 
-from .context import LoggingContext
-from .spans import Span, SpanContext, SpanKind, SpanStatus, SpanStatusCode, generate_span_id, generate_trace_id
+from opentelemetry import trace
+from opentelemetry.trace import INVALID_SPAN_CONTEXT, NonRecordingSpan, SpanContext, SpanKind, Status, StatusCode # type: ignore[attr-defined]
+
 from .code_snippets import CodeSnippetExtractor
+
+
+from .core import Lumberjack
 
 
 def start_span(
@@ -15,8 +18,8 @@ def start_span(
     kind: SpanKind = SpanKind.INTERNAL,
     attributes: Optional[Dict[str, Any]] = None,
     span_context: Optional[SpanContext] = None
-) -> Span:
-    """Start a new span.
+) -> Optional[trace.Span]:
+    """Start a new span using OpenTelemetry.
 
     Args:
         name: The name of the span
@@ -25,66 +28,69 @@ def start_span(
         span_context: Optional span context for distributed tracing
 
     Returns:
-        The newly created span
+        The newly created span (OpenTelemetry span), or None if no tracer available
     """
-    # Get parent span context
-    current_span = LoggingContext.get_current_span()
+    
+    # Get tracer from Lumberjack instance
+    lumberjack = Lumberjack()
+    tracer = lumberjack.tracer
 
+    if not tracer:
+        return None
+    
+    # Create OTel context if needed
+    context = None
     if span_context:
-        # Use explicit span context from distributed tracing
-        parent_span_id = span_context.span_id
-        trace_id = span_context.trace_id
-    elif current_span:
-        # Use current span as parent
-        parent_span_id = current_span.span_id
-        trace_id = current_span.trace_id
-    else:
-        # Root span
-        parent_span_id = None
-        trace_id = generate_trace_id()
-
-    # Create new span
-    span = Span(
-        trace_id=trace_id,
-        span_id=generate_span_id(),
+        # Use the provided span context for distributed tracing
+        context = trace.set_span_in_context(trace.NonRecordingSpan(span_context))
+    
+    # Start the span
+    span = tracer.start_span(
         name=name,
         kind=kind,
-        parent_span_id=parent_span_id,
-        attributes=attributes or {}
+        attributes=attributes,
+        context=context
     )
-
-    # Push span to context
-    LoggingContext.push_span(span)
-
+    
     return span
 
 
-def end_span(span: Optional[Span] = None, status: Optional[SpanStatus] = None) -> None:
+def end_span(span: Optional[trace.Span] = None, status: Optional[Status] = None) -> None:
     """End a span.
 
     Args:
         span: The span to end. If None, ends the current active span.
         status: Optional status to set on the span
     """
-    target_span = span or LoggingContext.get_current_span()
+    # Determine target span
+    if span is None:
+        target_span = trace.get_current_span()
+        if not target_span or not target_span.is_recording():
+            return
+    else:
+        target_span = span
+    
+    if not target_span:
+        return
+    
+    # Set status if provided
+    if status:
+        target_span.set_status(status)
+    
+    # End the span
+    target_span.end()
 
-    if target_span and not target_span.is_ended():
-        target_span.end(status)
-        _submit_span_to_core(target_span)
 
-        # If this is the current span, pop it from context
-        current_span = LoggingContext.get_current_span()
-        if current_span and current_span.span_id == target_span.span_id:
-            LoggingContext.pop_span()
-
-
-def get_current_span() -> Optional[Span]:
+def get_current_span() -> Optional[trace.Span]:
     """Get the currently active span.
 
     Returns:
-        The current active span, or None if no span is active
+        The current active OpenTelemetry span, or None if no span is active
     """
-    return LoggingContext.get_current_span()
+    otel_span = trace.get_current_span()
+    if otel_span and otel_span.is_recording():
+        return otel_span
+    return None
 
 
 def get_current_trace_id() -> Optional[str]:
@@ -93,10 +99,15 @@ def get_current_trace_id() -> Optional[str]:
     Returns:
         The current trace ID, or None if no span is active
     """
-    return LoggingContext.get_trace_id()
+    otel_span = trace.get_current_span()
+    if otel_span and otel_span.is_recording():
+        span_context = otel_span.get_span_context()
+        if span_context.is_valid:
+            return format(span_context.trace_id, "032x")
+    return None
 
 
-def set_span_attribute(key: str, value: Any, span: Optional[Span] = None) -> None:
+def set_span_attribute(key: str, value: Any, span: Optional[trace.Span] = None) -> None:
     """Set an attribute on a span.
 
     Args:
@@ -104,7 +115,7 @@ def set_span_attribute(key: str, value: Any, span: Optional[Span] = None) -> Non
         value: The attribute value
         span: The span to set the attribute on. If None, uses current active span.
     """
-    target_span = span or LoggingContext.get_current_span()
+    target_span = span or get_current_span()
     if target_span:
         target_span.set_attribute(key, value)
 
@@ -112,7 +123,7 @@ def set_span_attribute(key: str, value: Any, span: Optional[Span] = None) -> Non
 def add_span_event(
     name: str,
     attributes: Optional[Dict[str, Any]] = None,
-    span: Optional[Span] = None
+    span: Optional[trace.Span] = None
 ) -> None:
     """Add an event to a span.
 
@@ -121,14 +132,14 @@ def add_span_event(
         attributes: Optional event attributes
         span: The span to add the event to. If None, uses current active span.
     """
-    target_span = span or LoggingContext.get_current_span()
+    target_span = span or get_current_span()
     if target_span:
         target_span.add_event(name, attributes)
 
 
 def record_exception_on_span(
     exception: Exception,
-    span: Optional[Span] = None,
+    span: Optional[trace.Span] = None,
     escaped: bool = False,
     capture_code_snippets: bool = True,
     context_lines: int = 5
@@ -142,60 +153,45 @@ def record_exception_on_span(
         capture_code_snippets: Whether to capture code snippets from traceback frames
         context_lines: Number of context lines to capture around error line
     """
-    target_span = span or LoggingContext.get_current_span()
+    target_span = span or get_current_span()
     if not target_span:
         return
 
-    # Get exception information
-    exception_type = type(exception).__name__
-    exception_message = str(exception)
-    exception_stacktrace = ''.join(traceback.format_exception(
-        type(exception), exception, exception.__traceback__
-    ))
+    # Use OpenTelemetry's built-in exception recording
+    target_span.record_exception(exception, escaped=escaped)
+    
+    # Set span status to ERROR
+    target_span.set_status(Status(StatusCode.ERROR, str(exception)))
 
-    # Create exception event attributes
-    attributes = {
-        "exception.type": exception_type,
-        "exception.message": exception_message,
-        "exception.stacktrace": exception_stacktrace
-    }
+    # Optionally add code snippets as additional attributes
+    if capture_code_snippets:
+        _add_code_snippets_to_span(target_span, exception, context_lines)
 
-    if escaped:
-        attributes["exception.escaped"] = "true"
 
-    # Get configuration from Lumberjack singleton for code snippet capture
-    from .core import Lumberjack
+def _add_code_snippets_to_span(
+    span: trace.Span, 
+    exception: Exception, 
+    context_lines: int
+) -> None:
+    """Add code snippets from exception traceback to span attributes."""
     lumberjack_instance = Lumberjack()
 
-    # Use provided params or fall back to global config
-    capture_enabled = (
-        capture_code_snippets if capture_code_snippets is not None
-        else lumberjack_instance.code_snippet_enabled
+    extractor = CodeSnippetExtractor(
+        context_lines=context_lines,
+        max_frames=getattr(lumberjack_instance, 'code_snippet_max_frames', 10),
+        capture_locals=False,
+        exclude_patterns=getattr(lumberjack_instance, 'code_snippet_exclude_patterns', [])
     )
-    context_lines_count = (
-        context_lines if context_lines is not None
-        else lumberjack_instance.code_snippet_context_lines
-    )
-
-    # Capture code snippets if enabled
-    if capture_enabled:
-        extractor = CodeSnippetExtractor(
-            context_lines=context_lines_count,
-            max_frames=lumberjack_instance.code_snippet_max_frames,
-            capture_locals=False,
-            exclude_patterns=lumberjack_instance.code_snippet_exclude_patterns
-        )
+    
+    try:
         frame_infos = extractor.extract_from_exception(exception)
-    else:
-        frame_infos = []
-
-    # Add frame information to attributes if we have any
-    if frame_infos:
+        
+        # Add frame information to attributes
         for i, frame_info in enumerate(frame_infos):
             frame_prefix = f"exception.frames.{i}"
-            attributes[f"{frame_prefix}.filename"] = frame_info['filename']
-            attributes[f"{frame_prefix}.lineno"] = str(frame_info['lineno'])
-            attributes[f"{frame_prefix}.function"] = frame_info['function']
+            span.set_attribute(f"{frame_prefix}.filename", frame_info['filename'])
+            span.set_attribute(f"{frame_prefix}.lineno", frame_info['lineno'])
+            span.set_attribute(f"{frame_prefix}.function", frame_info['function'])
 
             # Add code snippet if available
             if frame_info['code_snippet']:
@@ -205,28 +201,10 @@ def record_exception_on_span(
                     show_line_numbers=True,
                     highlight_error=True
                 )
-                attributes[f"{frame_prefix}.code_snippet"] = formatted_snippet
-
-                # Add individual context lines
-                for j, (line, line_num) in enumerate(
-                    zip(frame_info['code_snippet'],
-                        frame_info['context_line_numbers'])
-                ):
-                    attributes[f"{frame_prefix}.context.{line_num}"] = line
-
-                # Mark the error line
-                if frame_info['error_line_index'] >= 0:
-                    error_line_num = frame_info['context_line_numbers'][frame_info['error_line_index']]
-                    attributes[f"{frame_prefix}.error_lineno"] = str(
-                        error_line_num)
-
-    # Add exception event to span
-    target_span.add_event("exception", attributes)
-
-    # Set span status to ERROR if not already set
-    if target_span.status.code == SpanStatusCode.UNSET:
-        target_span.status = SpanStatus(
-            SpanStatusCode.ERROR, exception_message)
+                span.set_attribute(f"{frame_prefix}.code_snippet", formatted_snippet)
+    except Exception:
+        # If code snippet extraction fails, don't break the exception recording
+        pass
 
 
 @contextmanager
@@ -235,7 +213,7 @@ def span_context(
     kind: SpanKind = SpanKind.INTERNAL,
     attributes: Optional[Dict[str, Any]] = None,
     record_exception: bool = True
-) -> Generator[Span, None, None]:
+) -> Generator[trace.Span, None, None]:
     """Context manager for creating and managing a span.
 
     Args:
@@ -245,32 +223,31 @@ def span_context(
         record_exception: Whether to record exceptions as span events
 
     Yields:
-        The created span
+        The created OpenTelemetry span
 
     Example:
         with span_context("my_operation") as span:
             span.set_attribute("key", "value")
             # do work
     """
-    span = start_span(name, kind, attributes)
-    try:
-        yield span
-    except Exception as e:
-        if record_exception:
-            record_exception_on_span(e, span, escaped=True)
-        else:
-            span.status = SpanStatus(SpanStatusCode.ERROR, str(e))
-        raise
-    finally:
-        end_span(span)
-
-
-def _submit_span_to_core(span: Span) -> None:
-    """Submit a span to the core for batching."""
-    try:
-        from .core import Lumberjack
-        instance = Lumberjack()
-        instance.add_span(span)
-    except (ImportError, AttributeError):
-        # Core not available, skip for now
-        pass
+    
+    # Get tracer from Lumberjack instance
+    lumberjack = Lumberjack()
+    tracer = lumberjack.tracer
+    if not tracer:
+        # No tracer available - yield a no-op span
+        yield NonRecordingSpan(INVALID_SPAN_CONTEXT)
+        return
+        
+    # Use OpenTelemetry's context manager
+    # Cast to Any to work around pylance type issues with abstract Tracer
+    with cast(Any, tracer).start_as_current_span(
+        name, kind=kind, attributes=attributes
+    ) as span:
+        try:
+            yield span
+        except Exception as e:
+            if record_exception:
+                span.record_exception(e)
+                span.set_status(Status(StatusCode.ERROR, str(e)))
+            raise

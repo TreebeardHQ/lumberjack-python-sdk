@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Dict, List
 from .constants import LogEntry
 
 if TYPE_CHECKING:
-    from .spans import Span
+    from opentelemetry.trace import Span # pyright: ignore[reportMissingTypeStubs]
 
 
 class ObjectBatch:

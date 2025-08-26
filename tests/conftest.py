@@ -12,31 +12,17 @@ src_path = os.path.abspath(os.path.join(
 sys.path.insert(0, src_path)
 path_updated = True
 
-if path_updated:
-    from lumberjack_sdk.context import LoggingContext
-
-
 @pytest.fixture(autouse=True)
 def reset_context():
-    """Clear logging context between tests."""
-    LoggingContext.clear()
-    # Reset the class variables for a clean test environment
-    LoggingContext._thread_local = None
-    LoggingContext._context_type = None
+    """Reset context between tests."""
+    # Context is now managed by OpenTelemetry
     yield
-    LoggingContext.clear()
-    LoggingContext._thread_local = None
-    LoggingContext._context_type = None
 
 
 @pytest.fixture(autouse=True)
 def clean_modules():
     """Temporarily remove gevent and eventlet from sys.modules if present."""
-    # First reset context
-    LoggingContext._thread_local = None
-    LoggingContext._context_type = None
-
-    # Then clean modules
+    # Clean modules for testing
     saved_modules = {}
     for name in ['gevent',
                  'eventlet',

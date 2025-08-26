@@ -9,8 +9,6 @@ class ExampleAppConfig(AppConfig):
         """Initialize Lumberjack when Django starts up."""
         from lumberjack_sdk.lumberjack_django import LumberjackDjango
 
-        # Initialize Lumberjack with configuration
-        LumberjackDjango.init(
-            project_name="django-example",
-            log_to_stdout=True,  # Enable stdout logging for demo
-        )
+        # Initialize Lumberjack using Django settings
+        # LumberjackDjango.init() will automatically read Django settings prefixed with LUMBERJACK_
+        LumberjackDjango.init()

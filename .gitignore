@@ -45,3 +45,8 @@ htmlcov/
 
 # Local development
 .python-version 
+
+ui/node_modules
+.ruff_cache
+.mypy_cache
+.claude

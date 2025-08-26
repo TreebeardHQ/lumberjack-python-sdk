@@ -67,10 +67,18 @@ def main():
 
     # Update versions
     new_version = update_version('pyproject.toml', current_version, args.dev)
-    update_version('setup.py', current_version, args.dev)
     update_version('src/lumberjack_sdk/version/__init__.py',
                    current_version, args.dev)
     print(f"Updated version to {new_version}")
+
+    # Generate type stubs before building
+    print("Generating type stubs...")
+    try:
+        subprocess.run(['python', 'generate_stubs.py'], check=True)
+        print("Generated type stubs")
+    except subprocess.CalledProcessError as e:
+        print(f"Warning: Failed to generate stubs: {e}")
+        print("Continuing with build...")
 
     # Clean dist directory
     dist_dir = Path('dist')

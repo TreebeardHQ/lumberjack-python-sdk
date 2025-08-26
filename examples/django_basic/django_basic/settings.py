@@ -48,7 +48,6 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
-    "lumberjack.lumberjack_django.LumberjackDjangoMiddleware",
 ]
 
 ROOT_URLCONF = "django_basic.urls"
@@ -126,3 +125,10 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # Lumberjack configuration
 # Set your Lumberjack API key as an environment variable:
 # export LUMBERJACK_API_KEY="your-api-key-here"
+import os
+
+LUMBERJACK_API_KEY = os.getenv("LUMBERJACK_API_KEY", "")  # Empty for fallback mode
+LUMBERJACK_PROJECT_NAME = "django-basic-example"
+LUMBERJACK_LOG_TO_STDOUT = True  # Enable for development
+LUMBERJACK_CAPTURE_PYTHON_LOGGER = True  # Capture Django's built-in logging
+LUMBERJACK_DEBUG_MODE = DEBUG  # Match Django's debug setting
