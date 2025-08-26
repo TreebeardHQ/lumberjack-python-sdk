@@ -56,8 +56,7 @@ uv run lumberjack claude init
 # - Add Lumberjack SDK to your code with proper configuration
 ```
 
-[!NOTE]
-
+> [!NOTE]
 > You must add `LUMBERJACK_LOCAL_SERVERED_ENABLED=true` to your local environment (dotenv or whatever) for logs to be forwarded by the SDK.
 
 After running `lumberjack claude init`, Claude Code will:
@@ -77,8 +76,7 @@ uv run lumberjack serve
 # Run your application - logs will appear in the web UI.
 ```
 
-[!TIP]
-
+> [!TIP]
 > You can just leave this server running in a tab. The SDK will auto-discover it locally. Also, if you forget, Claude can start it for you
 
 #### Manual Setup for Local Development
