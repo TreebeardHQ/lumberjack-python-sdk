@@ -35,13 +35,21 @@ LUMBERJACK_LOCAL_SERVER_ENABLED=true
 
 This will automatically configure the SDK to send logs to your local Lumberjack server instead of the production API.
 
-## Step 2: Detect the Web Framework
+## Step 2: Detect the Web Framework and Configuration Management
 Search the codebase to determine which framework is being used:
 
 1. **Flask**: Search for `from flask import Flask` or `Flask(__name__)` 
 2. **FastAPI**: Search for `from fastapi import FastAPI` or `FastAPI()`
 3. **Django**: Search for `django` in requirements.txt or settings.py files
 4. **None**: If none of the above are found, treat it as a standalone Python application
+
+## Step 2.5: Detect Pydantic BaseSettings Usage
+Search the codebase to determine if the application uses pydantic BaseSettings for configuration:
+
+1. Search for `from pydantic_settings import BaseSettings` or `from pydantic import BaseSettings`
+2. Search for classes that inherit from `BaseSettings`
+3. Look for files named `config.py`, `settings.py`, or similar configuration files
+4. If found, note the settings class name and file location - you'll need to modify this class
 
 ## Step 3: Add the SDK to Dependencies
 
@@ -87,6 +95,36 @@ dev = [
 **If the project doesn't have separate dev dependencies:**
 - Add to main requirements with comment: `lumberjack-sdk[local-server,flask]  # local-server only needed for development`
 
+## Step 3.5: Configure Pydantic BaseSettings (if detected in Step 2.5)
+
+If the application uses pydantic BaseSettings for configuration management, you MUST update the settings class to prevent validation errors and enable proper integration:
+
+```python
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    # Your existing settings...
+    
+    # Add Lumberjack settings to prevent validation errors
+    # The field names must match the env var names (lowercase with underscores)
+    lumberjack_local_server_enabled: bool = False
+    lumberjack_project_name: str = "my-app"  # Replace with your app name
+    lumberjack_api_key: str = ""  # Empty for local mode
+    lumberjack_env: str = "development"
+    
+    class Config:
+        env_file = ".env"
+        # Note: Even without explicit extra="forbid", pydantic-settings 
+        # may enforce validation, so always add the fields above
+
+# Create a settings instance (usually done in your main config file)
+settings = Settings()
+```
+
+**Why this is necessary:** Pydantic BaseSettings validates environment variables against your Settings class fields. Without these fields defined, you'll get validation errors when the `LUMBERJACK_*` environment variables are present in your `.env` file.
+
+**Integration with Lumberjack:** Once configured, you'll use the settings object in Lumberjack.init() instead of environment variables (shown in Step 4).
+
 ## Step 4: Add the Initialization Code
 
 Based on the framework detected in Step 2, add the appropriate initialization code:
@@ -105,6 +143,26 @@ app = Flask(__name__)
 # All other settings are automatically configured via environment variables
 Lumberjack.init(
     project_name="my-flask-app"  # Replace with your project name
+)
+
+# Instrument Flask app
+LumberjackFlask.instrument(app)
+```
+
+**If using Pydantic BaseSettings:** Use the settings object instead:
+```python
+from flask import Flask
+from lumberjack_sdk import Lumberjack, LumberjackFlask
+from .config import settings  # Import your settings instance
+
+app = Flask(__name__)
+
+# Initialize Lumberjack using pydantic settings
+Lumberjack.init(
+    project_name=settings.lumberjack_project_name,
+    local_server_enabled=settings.lumberjack_local_server_enabled,
+    api_key=settings.lumberjack_api_key,
+    env=settings.lumberjack_env,
 )
 
 # Instrument Flask app
@@ -131,29 +189,26 @@ Lumberjack.init(
 LumberjackFastAPI.instrument(app)
 ```
 
-**⚠️ Important for FastAPI with pydantic-settings:**
-
-FastAPI apps commonly use `pydantic-settings` for configuration management. To prevent validation errors when setting `LUMBERJACK_LOCAL_SERVER_ENABLED=true` in your `.env` file, you MUST update your Settings class:
-
+**If using Pydantic BaseSettings:** Use the settings object instead:
 ```python
-from pydantic_settings import BaseSettings
+from fastapi import FastAPI
+from lumberjack_sdk import Lumberjack, LumberjackFastAPI
+from .config import settings  # Import your settings instance
 
-class Settings(BaseSettings):
-    # Your existing settings...
-    
-    # Add these Lumberjack settings to prevent validation errors
-    # The field names must match the env var names (lowercase with underscores)
-    lumberjack_local_server_enabled: bool = False
-    lumberjack_local_server_endpoint: str = "localhost:4317"
-    lumberjack_local_server_service_name: str = "my-service"
-    
-    class Config:
-        env_file = ".env"
-        # Note: Even without explicit extra="forbid", pydantic-settings 
-        # may enforce validation, so always add the fields above
+app = FastAPI()
+
+# Initialize Lumberjack using pydantic settings
+Lumberjack.init(
+    project_name=settings.lumberjack_project_name,
+    local_server_enabled=settings.lumberjack_local_server_enabled,
+    api_key=settings.lumberjack_api_key,
+    env=settings.lumberjack_env,
+)
+
+# Instrument FastAPI app
+LumberjackFastAPI.instrument(app)
 ```
 
-**Why this is necessary:** Pydantic-settings validates environment variables against your Settings class fields. Without these fields defined, you'll get validation errors when the `LUMBERJACK_*` environment variables are present in your `.env` file.
 
 ### For Django Applications
 
@@ -199,6 +254,25 @@ from lumberjack_sdk import Lumberjack
 # All other settings are automatically configured via environment variables
 Lumberjack.init(
     project_name="my-python-app"  # Replace with your project name
+)
+
+# Now all Python logging will be captured
+logger = logging.getLogger(__name__)
+logger.info("Application started with Lumberjack logging")
+```
+
+**If using Pydantic BaseSettings:** Use the settings object instead:
+```python
+import logging
+from lumberjack_sdk import Lumberjack
+from .config import settings  # Import your settings instance
+
+# Initialize Lumberjack using pydantic settings
+Lumberjack.init(
+    project_name=settings.lumberjack_project_name,
+    local_server_enabled=settings.lumberjack_local_server_enabled,
+    api_key=settings.lumberjack_api_key,
+    env=settings.lumberjack_env,
 )
 
 # Now all Python logging will be captured
@@ -257,7 +331,7 @@ The SDK automatically captures trace context for distributed tracing when availa
    - Only `project_name` parameter (REQUIRED)
    - Add `LUMBERJACK_LOCAL_SERVER_ENABLED=true` to your `.env` file
 5. **For web frameworks**: Also add the instrumentation call (LumberjackFlask.instrument(app), etc.)
-6. **For FastAPI**: ALWAYS update Settings class to include LUMBERJACK_* fields (even without explicit extra="forbid")
+6. **For Pydantic BaseSettings**: ALWAYS update Settings class to include LUMBERJACK_* fields and use settings object in Lumberjack.init()
 7. **RESPECT existing settings** - do not modify existing configuration except for adding `LUMBERJACK_LOCAL_SERVER_ENABLED=true` to `.env`
 
 ## Expected Changes
@@ -267,7 +341,7 @@ You should make 2-5 file changes:
 2. Add initialization code to the main application file
 3. For web frameworks: Add instrumentation call
 4. For Django only: Also update settings.py and apps.py
-5. For FastAPI: ALWAYS update Settings class to add LUMBERJACK_* fields
+5. For Pydantic BaseSettings: ALWAYS update Settings class to add LUMBERJACK_* fields and use in Lumberjack.init()
 
 ## Verification
 

@@ -2,7 +2,7 @@
 
 Lumberjack is the best logging library for local development, giving both you and Claude and Cursor first class access to your logs via a unified UI and a local MCP server. It's fully otel compatible, so when you're ready for production observability, you can use the lumberjack SDK with basically whatever tool you want.
 
-[![Local log dashboard](./docs/images/local_log_server.png)]
+[Local log dashboard](./docs/images/local_log_server.png)
 
 ## Why Use Lumberjack?
 
@@ -56,15 +56,15 @@ uv run lumberjack claude init
 # - Add Lumberjack SDK to your code with proper configuration
 ```
 
-> [!NOTE]
-> You must add `LUMBERJACK_LOCAL_SERVERED_ENABLED=true` to your local environment (dotenv or whatever) for logs to be forwarded by the SDK.
-
 After running `lumberjack claude init`, Claude Code will:
 
 - 🔍 **Analyze your codebase** to detect Flask, FastAPI, Django, or vanilla Python
 - 📝 **Add Lumberjack initialization** to the right file with proper configuration
 - 🏗️ **Add framework instrumentation** if applicable
 - 📦 **Update your dependencies** (requirements.txt, pyproject.toml, etc.)
+
+> [!NOTE]
+> You must add `LUMBERJACK_LOCAL_SERVERED_ENABLED=true` to your local environment (dotenv or whatever) for logs to be forwarded by the SDK.
 
 Then simply:
 

@@ -38,11 +38,16 @@ import {
   Loader2,
   Code,
   Copy,
+  Keyboard,
+  Check,
 } from "lucide-react";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useSettings } from "@/hooks/useSettings";
+import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
+import { createShortcutActions } from "@/lib/shortcutActions";
 import { EditorSelectionModal } from "@/components/editor-selection-modal";
+import { KeyboardShortcutsHelp } from "@/components/KeyboardShortcutsHelp";
 import { createColumns } from "./columns";
 import { LoadMoreButton } from "./load-more-button";
 
@@ -128,17 +133,36 @@ export function VirtualizedDataTable({
   } | null>(null);
   const [showEditorModal, setShowEditorModal] = useState(false);
   const [hoveredRow, setHoveredRow] = useState<string | null>(null);
+  const [pendingFileOpen, setPendingFileOpen] = useState<{
+    filePath: string;
+    lineNumber: string | number;
+  } | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
+  const [copiedButtons, setCopiedButtons] = useState<Set<string>>(new Set());
 
   const { settings, loading, setFontSize, toggleDarkMode, setEditor } =
     useSettings();
 
   const parentRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const isProgrammaticScroll = useRef(false);
 
   const fontSizeClasses = {
     small: "text-[12px]",
     medium: "text-sm",
     large: "text-base",
+  };
+
+  const handleCopy = (text: string, buttonId: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedButtons((prev) => new Set([...prev, buttonId]));
+    setTimeout(() => {
+      setCopiedButtons((prev) => {
+        const newSet = new Set(prev);
+        newSet.delete(buttonId);
+        return newSet;
+      });
+    }, 1500);
   };
 
   const getColumnWidths = (fontSize: "small" | "medium" | "large") => {
@@ -173,9 +197,33 @@ export function VirtualizedDataTable({
   const handleEditorSelect = (selectedEditor: "cursor" | "vscode" | null) => {
     if (selectedEditor) {
       setEditor(selectedEditor);
+
+      // If we have a pending file to open, open it now
+      if (pendingFileOpen) {
+        openInEditor(
+          pendingFileOpen.filePath,
+          pendingFileOpen.lineNumber,
+          selectedEditor
+        );
+        setPendingFileOpen(null);
+      }
     }
     setShowEditorModal(false);
   };
+
+  // Create shortcut actions
+  const shortcutActions = createShortcutActions(
+    parentRef,
+    searchInputRef,
+    setSelectedRow,
+    setGlobalFilter,
+    onTailingChange,
+    isTailing,
+    toggleDarkMode,
+    setShowEditorModal,
+    setPendingFileOpen,
+    setShowHelp
+  );
 
   // Filter helper functions
   const getAllLevels = () => ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"];
@@ -288,6 +336,89 @@ export function VirtualizedDataTable({
   });
 
   const { rows } = table.getRowModel();
+
+  // Keyboard shortcuts integration
+  const { selectedRowIndex, setSelectedRowIndex } = useKeyboardShortcuts({
+    totalRows: rows.length,
+    onNavigateRow: (index) => {
+      const tableRow = index >= 0 && index < rows.length ? rows[index] : null;
+      if (!tableRow) return;
+
+      const row = tableRow.original;
+      const attributes = row.attributes as Record<string, any>;
+      const hasAttributes = attributes && Object.keys(attributes).length > 0;
+
+      // If details are currently open, update them to show the newly selected row
+      if (selectedRow && hasAttributes) {
+        setSelectedRow({ id: row.id, attributes });
+      }
+
+      // Scroll the selected row into view
+      if (parentRef.current) {
+        const rowHeight = 40; // Approximate row height
+        const scrollTop = index * rowHeight;
+        const container = parentRef.current;
+        const containerHeight = container.clientHeight;
+        const currentScrollTop = container.scrollTop;
+
+        // Only scroll if the row is not visible
+        if (
+          scrollTop < currentScrollTop ||
+          scrollTop > currentScrollTop + containerHeight - rowHeight
+        ) {
+          container.scrollTo({
+            top: Math.max(0, scrollTop - containerHeight / 2),
+            behavior: "smooth",
+          });
+        }
+      }
+    },
+    onToggleDetails: () => {
+      // Use rows (filtered/sorted) instead of data (raw) to match the visual display
+      const tableRow =
+        selectedRowIndex >= 0 && selectedRowIndex < rows.length
+          ? rows[selectedRowIndex]
+          : null;
+      if (!tableRow) return;
+
+      const row = tableRow.original;
+      const attributes = row.attributes as Record<string, any>;
+      const hasAttributes = attributes && Object.keys(attributes).length > 0;
+
+      if (!hasAttributes) return;
+
+      // Toggle details: if already selected, deselect; otherwise select
+      if (selectedRow?.id === row.id) {
+        setSelectedRow(null);
+      } else {
+        setSelectedRow({ id: row.id, attributes });
+      }
+    },
+    onOpenInEditor: () => {
+      const tableRow =
+        selectedRowIndex >= 0 && selectedRowIndex < rows.length
+          ? rows[selectedRowIndex]
+          : null;
+      const row = tableRow?.original || null;
+      shortcutActions.openInEditor(row, settings?.editor || null);
+    },
+    onCopyMessage: () => {
+      const tableRow =
+        selectedRowIndex >= 0 && selectedRowIndex < rows.length
+          ? rows[selectedRowIndex]
+          : null;
+      const row = tableRow?.original || null;
+      shortcutActions.copyMessage(row);
+    },
+    onFocusSearch: shortcutActions.focusSearch,
+    onClearSearch: shortcutActions.clearSearch,
+    onToggleTailing: shortcutActions.toggleTailing,
+    onScrollToTop: shortcutActions.scrollToTop,
+    onScrollToBottom: shortcutActions.scrollToBottom,
+    onToggleDarkMode: shortcutActions.toggleDarkMode,
+    onShowHelp: shortcutActions.showHelp,
+    isSearchFocused: document.activeElement === searchInputRef.current,
+  });
 
   // Virtualization with dynamic sizing
   const rowVirtualizer = useVirtualizer({
@@ -565,6 +696,7 @@ export function VirtualizedDataTable({
           <div className="relative">
             <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
             <Input
+              ref={searchInputRef}
               placeholder="Search logs..."
               value={globalFilter}
               onChange={(event) => setGlobalFilter(event.target.value)}
@@ -669,6 +801,22 @@ export function VirtualizedDataTable({
             </DropdownMenu>
             <TooltipContent className="animate-none">
               <p>Change font size</p>
+            </TooltipContent>
+          </Tooltip>
+
+          {/* Keyboard Shortcuts Help */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowHelp(true)}
+              >
+                <Keyboard className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent className="animate-none">
+              <p>Keyboard shortcuts (?)</p>
             </TooltipContent>
           </Tooltip>
         </div>
@@ -802,7 +950,7 @@ export function VirtualizedDataTable({
               }}
             >
               {/* Table Header */}
-              <div className="sticky top-0 z-10 bg-background border-b">
+              <div className="sticky top-0 z-10 bg-background border-b h-[50px]">
                 <div
                   className={`flex ${
                     fontSizeClasses[settings.fontSize]
@@ -866,6 +1014,8 @@ export function VirtualizedDataTable({
                   attributes && Object.keys(attributes).length > 0;
                 const isErrorRow = hasExceptionData(attributes);
                 const isHovered = hoveredRow === row.id;
+                const isKeyboardSelected =
+                  selectedRowIndex === virtualRow.index;
 
                 // Check for code file and line information
                 const filePath = attributes?.["code.file.path"];
@@ -876,6 +1026,10 @@ export function VirtualizedDataTable({
                 const handleRowClick = () => {
                   if (!hasAttributes) return;
 
+                  // Sync keyboard navigation with mouse click
+                  setSelectedRowIndex(virtualRow.index);
+
+                  // Toggle details
                   if (selectedRow?.id === row.id) {
                     setSelectedRow(null);
                   } else {
@@ -887,6 +1041,8 @@ export function VirtualizedDataTable({
                   if (!hasCodeInfo) return;
 
                   if (!settings?.editor) {
+                    // Store the file info for after editor selection
+                    setPendingFileOpen({ filePath, lineNumber });
                     setShowEditorModal(true);
                     return;
                   }
@@ -918,6 +1074,10 @@ export function VirtualizedDataTable({
                       } font-mono ${hasAttributes ? "cursor-pointer" : ""} ${
                         selectedRow?.id === row.id ? "bg-muted/30" : ""
                       } ${
+                        isKeyboardSelected
+                          ? "ring-2 ring-primary/50 bg-primary/5"
+                          : ""
+                      } ${
                         isErrorRow
                           ? "bg-red-50/70 dark:bg-red-950/20 border-red-200/50 dark:border-red-800/30"
                           : ""
@@ -931,8 +1091,16 @@ export function VirtualizedDataTable({
                     >
                       {/* Hover Menu */}
                       <AnimatePresence>
-                        {isHovered && (
-                          <div className="absolute right-4 top-0 bottom-0 flex items-center z-20">
+                        {(isHovered || isKeyboardSelected) && (
+                          <div
+                            className={`absolute top-0 bottom-0 flex items-center z-20 ${
+                              settings.fontSize === "small"
+                                ? "right-20"
+                                : settings.fontSize === "medium"
+                                ? "right-24"
+                                : "right-28"
+                            }`}
+                          >
                             <div className="flex items-center gap-1">
                               {/* Open in Editor - Now leftmost */}
                               {hasCodeInfo && (
@@ -1100,8 +1268,8 @@ export function VirtualizedDataTable({
         {selectedRow && (
           <div className="w-80 border-l bg-background flex-shrink-0">
             <div className="h-full flex flex-col">
-              <div className="px-4 py-3 border-b bg-muted/20">
-                <div className="flex items-center justify-between">
+              <div className="px-2 py-2 border-b bg-muted/20 h-[50px]">
+                <div className="flex items-center justify-between h-full">
                   <h3 className="font-medium text-sm">Log Details</h3>
                   <button
                     onClick={() => setSelectedRow(null)}
@@ -1126,10 +1294,35 @@ export function VirtualizedDataTable({
                             <div className="text-[11px] font-medium text-red-600 dark:text-red-400 mb-1">
                               Stack Trace
                             </div>
-                            <div className="text-[9px] font-mono bg-red-50 dark:bg-red-950/30 p-2 rounded break-all max-h-48 overflow-y-auto border border-red-200 dark:border-red-800">
-                              <pre className="whitespace-pre-wrap">
-                                {selectedRow.attributes["exception.stacktrace"]}
-                              </pre>
+                            <div className="relative group">
+                              <div className="text-[9px] font-mono bg-red-50 dark:bg-red-950/30 p-2 rounded break-all max-h-48 overflow-y-auto border border-red-200 dark:border-red-800">
+                                <pre className="whitespace-pre-wrap">
+                                  {
+                                    selectedRow.attributes[
+                                      "exception.stacktrace"
+                                    ]
+                                  }
+                                </pre>
+                              </div>
+                              <button
+                                onClick={() =>
+                                  handleCopy(
+                                    selectedRow.attributes[
+                                      "exception.stacktrace"
+                                    ],
+                                    `stacktrace-${selectedRow.id}`
+                                  )
+                                }
+                                className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-background/80 hover:bg-background border rounded p-1"
+                              >
+                                {copiedButtons.has(
+                                  `stacktrace-${selectedRow.id}`
+                                ) ? (
+                                  <Check className="h-3 w-3 text-green-500" />
+                                ) : (
+                                  <Copy className="h-3 w-3" />
+                                )}
+                              </button>
                             </div>
                           </div>
                         )}
@@ -1138,8 +1331,27 @@ export function VirtualizedDataTable({
                             <div className="text-[11px] font-medium text-red-600 dark:text-red-400 mb-1">
                               Exception Type
                             </div>
-                            <div className="text-[11px] font-mono bg-red-50 dark:bg-red-950/30 p-2 rounded break-all border border-red-200 dark:border-red-800">
-                              {selectedRow.attributes["exception.type"]}
+                            <div className="relative group">
+                              <div className="text-[11px] font-mono bg-red-50 dark:bg-red-950/30 p-2 rounded break-all border border-red-200 dark:border-red-800">
+                                {selectedRow.attributes["exception.type"]}
+                              </div>
+                              <button
+                                onClick={() =>
+                                  handleCopy(
+                                    selectedRow.attributes["exception.type"],
+                                    `exception-type-${selectedRow.id}`
+                                  )
+                                }
+                                className="absolute top-1/2 right-2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-background/80 hover:bg-background border rounded p-1"
+                              >
+                                {copiedButtons.has(
+                                  `exception-type-${selectedRow.id}`
+                                ) ? (
+                                  <Check className="h-3 w-3 text-green-500" />
+                                ) : (
+                                  <Copy className="h-3 w-3" />
+                                )}
+                              </button>
                             </div>
                           </div>
                         )}
@@ -1148,8 +1360,27 @@ export function VirtualizedDataTable({
                             <div className="text-[11px] font-medium text-red-600 dark:text-red-400 mb-1">
                               Exception Message
                             </div>
-                            <div className="text-[11px] font-mono bg-red-50 dark:bg-red-950/30 p-2 rounded break-all border border-red-200 dark:border-red-800">
-                              {selectedRow.attributes["exception.message"]}
+                            <div className="relative group">
+                              <div className="text-[11px] font-mono bg-red-50 dark:bg-red-950/30 p-2 rounded break-all border border-red-200 dark:border-red-800">
+                                {selectedRow.attributes["exception.message"]}
+                              </div>
+                              <button
+                                onClick={() =>
+                                  handleCopy(
+                                    selectedRow.attributes["exception.message"],
+                                    `exception-message-${selectedRow.id}`
+                                  )
+                                }
+                                className="absolute top-1/2 right-2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-background/80 hover:bg-background border rounded p-1"
+                              >
+                                {copiedButtons.has(
+                                  `exception-message-${selectedRow.id}`
+                                ) ? (
+                                  <Check className="h-3 w-3 text-green-500" />
+                                ) : (
+                                  <Copy className="h-3 w-3" />
+                                )}
+                              </button>
                             </div>
                           </div>
                         )}
@@ -1163,18 +1394,42 @@ export function VirtualizedDataTable({
                     <div className="space-y-2">
                       {Object.entries(selectedRow.attributes)
                         .filter(([key]) => !key.startsWith("exception.")) // Exclude exception attributes
-                        .map(([key, value]) => (
-                          <div key={key} className="">
-                            <div className="text-[11px] font-medium text-muted-foreground mb-1">
-                              {key}
+                        .map(([key, value]) => {
+                          const valueString =
+                            typeof value === "object"
+                              ? JSON.stringify(value, null, 2)
+                              : String(value);
+
+                          return (
+                            <div key={key} className="">
+                              <div className="text-[11px] font-medium text-muted-foreground mb-1">
+                                {key}
+                              </div>
+                              <div className="relative group">
+                                <div className="text-[11px] font-mono bg-muted p-2 rounded break-all">
+                                  {valueString}
+                                </div>
+                                <button
+                                  onClick={() =>
+                                    handleCopy(
+                                      valueString,
+                                      `attr-${key}-${selectedRow.id}`
+                                    )
+                                  }
+                                  className="absolute top-1/2 right-2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-background/80 hover:bg-background border rounded p-1"
+                                >
+                                  {copiedButtons.has(
+                                    `attr-${key}-${selectedRow.id}`
+                                  ) ? (
+                                    <Check className="h-3 w-3 text-green-500" />
+                                  ) : (
+                                    <Copy className="h-3 w-3" />
+                                  )}
+                                </button>
+                              </div>
                             </div>
-                            <div className="text-[11px] font-mono bg-muted p-2 rounded break-all">
-                              {typeof value === "object"
-                                ? JSON.stringify(value, null, 2)
-                                : String(value)}
-                            </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                     </div>
                   </div>
                 </div>
@@ -1188,7 +1443,16 @@ export function VirtualizedDataTable({
       <EditorSelectionModal
         open={showEditorModal}
         onSelect={handleEditorSelect}
-        onClose={() => setShowEditorModal(false)}
+        onClose={() => {
+          setShowEditorModal(false);
+          setPendingFileOpen(null); // Clear pending file if modal is closed without selection
+        }}
+      />
+
+      {/* Keyboard Shortcuts Help */}
+      <KeyboardShortcutsHelp
+        open={showHelp}
+        onClose={() => setShowHelp(false)}
       />
     </div>
   );
