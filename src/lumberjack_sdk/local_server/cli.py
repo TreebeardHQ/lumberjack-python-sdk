@@ -275,21 +275,20 @@ def claude_init_command(args: argparse.Namespace) -> None:
         # Import installation detection
         from .installation_detector import detect_installation_method
         
-        # Detect the best installation method
-        print("🔍 Detecting lumberjack-mcp installation method...")
+        # Detect or install lumberjack-mcp
+        print("🔍 Setting up lumberjack-mcp installation...")
         method, status = detect_installation_method()
         print(status)
         
         if method is None:
-            print("\n❌ Cannot setup MCP integration - lumberjack-mcp not found.")
-            print("Please install lumberjack-sdk first:")
-            print("  pip install 'lumberjack_sdk[local-server]'")
+            print("\n❌ Cannot setup MCP integration.")
+            print("Please install lumberjack-sdk manually:")
+            print("  pip install 'lumberjack-sdk[local-server]'")
             print("  # OR")
-            print("  uv tool install lumberjack-sdk[local-server]")
+            print("  uv tool install lumberjack-sdk")
             sys.exit(1)
         
         print(f"📋 Using: {method.description}")
-        print(f"🔧 Command: {method}")
         
         # Use claude mcp add command
         try:
@@ -317,13 +316,11 @@ def claude_init_command(args: argparse.Namespace) -> None:
                 sys.exit(1)
             
             # Build the command arguments based on detection method
-            mcp_add_cmd = [claude_cmd, "mcp", "add", "lumberjack"]
+            # Format: claude mcp add <name> <command> [args...]
+            mcp_add_cmd = [claude_cmd, "mcp", "add", "lumberjack", method.command]
             if method.args:
-                # For complex commands like uvx, use the full command + args
-                mcp_add_cmd.extend([method.command] + method.args)
-            else:
-                # For simple commands, just use the command
-                mcp_add_cmd.append(method.command)
+                # Add each argument separately
+                mcp_add_cmd.extend(method.args)
             
             result = subprocess.run(
                 mcp_add_cmd,
@@ -409,21 +406,20 @@ def cursor_init_command(args: argparse.Namespace) -> None:
         # Import installation detection
         from .installation_detector import detect_installation_method
         
-        # Detect the best installation method
-        print("🔍 Detecting lumberjack-mcp installation method...")
+        # Detect or install lumberjack-mcp
+        print("🔍 Setting up lumberjack-mcp installation...")
         method, status = detect_installation_method()
         print(status)
         
         if method is None:
-            print("\n❌ Cannot setup MCP integration - lumberjack-mcp not found.")
-            print("Please install lumberjack-sdk first:")
-            print("  pip install 'lumberjack_sdk[local-server]'")
+            print("\n❌ Cannot setup MCP integration.")
+            print("Please install lumberjack-sdk manually:")
+            print("  pip install 'lumberjack-sdk[local-server]'")
             print("  # OR")
-            print("  uv tool install lumberjack-sdk[local-server]")
+            print("  uv tool install lumberjack-sdk")
             sys.exit(1)
         
         print(f"📋 Using: {method.description}")
-        print(f"🔧 Command: {method}")
         
         # Determine config file path
         if args.global_config:

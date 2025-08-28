@@ -84,11 +84,14 @@ uv run lumberjack serve
 If you prefer manual setup:
 
 ```bash
-# 1. Start the local development server
-uv run lumberjack serve
-# or: lumberjack serve (if installed with pip)
+# 1. Install lumberjack-sdk as a tool (for MCP integration with Claude Code/Cursor)
+uv tool install lumberjack-sdk
+# or: pip install 'lumberjack-sdk[local-server]' (if using pip)
 
-# 2. Add to your Python app
+# 2. Start the local development server
+lumberjack serve
+
+# 3. Add to your Python app
 ```
 
 ```python
@@ -108,6 +111,25 @@ try:
     Log.info("Operation completed", result=result)
 except Exception as e:
     Log.error("Operation failed", error=str(e), exc_info=True)
+```
+
+#### Manual MCP Integration Setup
+
+If you installed lumberjack-sdk as a tool (step 1 above), you can manually set up Claude Code or Cursor integration:
+
+**For Claude Code:**
+```bash
+# Add the MCP server
+claude mcp add lumberjack lumberjack-mcp
+```
+
+**For Cursor:**
+```bash
+# Set up project-specific MCP integration
+lumberjack cursor init
+
+# Or set up global MCP integration
+lumberjack cursor init --global
 ```
 
 ## Framework Support
