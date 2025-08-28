@@ -60,6 +60,43 @@ def check_command_available(command: str) -> bool:
             return False
 
 
+def is_running_via_uv() -> bool:
+    """
+    Detect if we're currently running in a UV context.
+    
+    Returns:
+        True if running via UV (uv run, uvx, etc.), False otherwise
+    """
+    # Check UV environment variables
+    if os.environ.get('UV_PROJECT_ROOT'):
+        return True
+    
+    if os.environ.get('UVX_ROOT'):
+        return True
+    
+    # Check if sys.executable contains UV paths
+    if 'uv' in sys.executable.lower():
+        return True
+    
+    # Check command line arguments for UV patterns
+    for arg in sys.argv:
+        if 'uv' in arg.lower():
+            return True
+    
+    # Check if parent process might be UV (best effort)
+    try:
+        import psutil
+        current_process = psutil.Process()
+        parent = current_process.parent()
+        if parent and 'uv' in parent.name().lower():
+            return True
+    except (ImportError, Exception):
+        # psutil not available or other error, skip this check
+        pass
+    
+    return False
+
+
 def install_with_uv_tool() -> Tuple[bool, str]:
     """
     Install lumberjack-sdk as a UV tool.
@@ -71,7 +108,7 @@ def install_with_uv_tool() -> Tuple[bool, str]:
         return False, "❌ UV not available"
     
     try:
-        print("📦 Installing lumberjack-sdk as UV tool...")
+        print("📦 Installing lumberjack-sdk as UV tool for global PATH availability...")
         result = subprocess.run(
             ["uv", "tool", "install", "lumberjack-sdk"],
             capture_output=True,
@@ -80,23 +117,41 @@ def install_with_uv_tool() -> Tuple[bool, str]:
         )
         
         if result.returncode == 0:
-            # Verify installation worked
-            if check_command_available("lumberjack-mcp"):
-                return True, "✅ Successfully installed lumberjack-sdk as UV tool"
+            # Verify installation worked by checking in a clean environment
+            # Use subprocess to avoid inheriting current environment PATH
+            verify_result = subprocess.run(
+                ["which", "lumberjack-mcp"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                env={"PATH": os.environ.get("PATH", "")}
+            )
+            
+            if verify_result.returncode == 0:
+                return True, "✅ Successfully installed lumberjack-sdk as UV tool - globally available"
             else:
-                return False, "❌ Installation completed but lumberjack-mcp not found in PATH"
+                return False, "❌ UV tool install completed but lumberjack-mcp not found in global PATH. Try running: uv tool update-shell"
         else:
             # Check if already installed
-            if "already installed" in result.stderr.lower():
-                if check_command_available("lumberjack-mcp"):
-                    return True, "✅ lumberjack-sdk already installed as UV tool"
+            if "already installed" in result.stderr.lower() or "already exists" in result.stderr.lower():
+                # Verify it's actually working
+                verify_result = subprocess.run(
+                    ["which", "lumberjack-mcp"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    env={"PATH": os.environ.get("PATH", "")}
+                )
+                
+                if verify_result.returncode == 0:
+                    return True, "✅ lumberjack-sdk already installed as UV tool - globally available"
                 else:
-                    return False, "❌ lumberjack-sdk installed but lumberjack-mcp not in PATH"
+                    return False, "❌ lumberjack-sdk already installed but lumberjack-mcp not found in global PATH. Try running: uv tool update-shell"
             else:
-                return False, f"❌ UV tool install failed: {result.stderr}"
+                return False, f"❌ UV tool install failed: {result.stderr.strip()}"
                 
     except subprocess.TimeoutExpired:
-        return False, "❌ UV tool install timed out"
+        return False, "❌ UV tool install timed out - network or system issue"
     except Exception as e:
         return False, f"❌ UV tool install error: {str(e)}"
 
@@ -109,8 +164,28 @@ def detect_installation_method() -> Tuple[Optional[InstallationMethod], str]:
         Tuple of (InstallationMethod or None, status_message)
     """
     
-    # Method 1: Check if lumberjack-mcp is already available in PATH
-    if check_command_available("lumberjack-mcp"):
+    # Check if we're running in a UV context
+    running_via_uv = is_running_via_uv()
+    
+    if running_via_uv and check_command_available("uv"):
+        # When running via UV, always install as tool to ensure global PATH availability
+        # (don't trust temporary PATH from uv run/uvx environments)
+        print("🔍 UV context detected - ensuring global tool installation...")
+        success, message = install_with_uv_tool()
+        if success:
+            method = InstallationMethod(
+                name="uv_tool",
+                command="lumberjack-mcp",
+                description="Using lumberjack-mcp installed via UV tool"
+            )
+            return method, message
+        else:
+            fallback_logger.warning(f"UV tool install failed: {message}")
+            # Fall through to other methods
+    
+    # Method 1: Check if lumberjack-mcp is already available in global PATH
+    # (only when not running via UV, since UV contexts can have misleading temporary PATH)
+    if not running_via_uv and check_command_available("lumberjack-mcp"):
         method = InstallationMethod(
             name="global",
             command="lumberjack-mcp",
@@ -118,7 +193,7 @@ def detect_installation_method() -> Tuple[Optional[InstallationMethod], str]:
         )
         return method, f"✅ Found lumberjack-mcp in PATH"
     
-    # Method 2: Try installing with UV tool if UV is available
+    # Method 2: Try installing with UV tool if UV is available (fallback for non-UV contexts)
     if check_command_available("uv"):
         success, message = install_with_uv_tool()
         if success:
@@ -152,7 +227,8 @@ def get_mcp_config_for_editor(editor: str = "cursor") -> Tuple[Optional[Dict[str
                    f"💡 Try one of these solutions:\n" \
                    f"1. Use regular pip: pip install 'lumberjack-sdk[local-server]'\n" \
                    f"2. Use uv tool install: uv tool install lumberjack-sdk\n" \
-                   f"3. Make sure lumberjack-mcp is in your PATH"
+                   f"3. Update your shell PATH: uv tool update-shell\n" \
+                   f"4. Restart your terminal after installing"
         
         return None, error_msg
     
