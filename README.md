@@ -85,7 +85,7 @@ If you prefer manual setup:
 
 ```bash
 # 1. Install lumberjack-sdk as a tool (for MCP integration with Claude Code/Cursor)
-uv tool install lumberjack-sdk
+uv tool install 'lumberjack-sdk[local-server]'
 # or: pip install 'lumberjack-sdk[local-server]' (if using pip)
 
 # 2. Start the local development server

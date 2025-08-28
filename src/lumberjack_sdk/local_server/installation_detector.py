@@ -108,9 +108,9 @@ def install_with_uv_tool() -> Tuple[bool, str]:
         return False, "❌ UV not available"
     
     try:
-        print("📦 Installing lumberjack-sdk as UV tool for global PATH availability...")
+        print("📦 Installing lumberjack-sdk[local-server] as UV tool for global PATH availability...")
         result = subprocess.run(
-            ["uv", "tool", "install", "lumberjack-sdk"],
+            ["uv", "tool", "install", "lumberjack-sdk[local-server]"],
             capture_output=True,
             text=True,
             timeout=30
@@ -226,7 +226,7 @@ def get_mcp_config_for_editor(editor: str = "cursor") -> Tuple[Optional[Dict[str
         error_msg = f"{status}\n\n" \
                    f"💡 Try one of these solutions:\n" \
                    f"1. Use regular pip: pip install 'lumberjack-sdk[local-server]'\n" \
-                   f"2. Use uv tool install: uv tool install lumberjack-sdk\n" \
+                   f"2. Use uv tool install: uv tool install 'lumberjack-sdk[local-server]'\n" \
                    f"3. Update your shell PATH: uv tool update-shell\n" \
                    f"4. Restart your terminal after installing"
         
