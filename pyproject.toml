@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lumberjack_sdk"
-version = "2.0.3"
+version = "2.0.4"
 authors = [
     { name = "George Mayer", email = "george@treebeardhq.com" },
 ]
@@ -45,6 +45,7 @@ local-server = [
     "mcp>=1.0.0",
     "requests>=2.28.0",
     "psutil>=7.0.0",
+    "packaging>=21.0",
 ]
 web = [
     "opentelemetry-instrumentation-flask>=0.48b0",

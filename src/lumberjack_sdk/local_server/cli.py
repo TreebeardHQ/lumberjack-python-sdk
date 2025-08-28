@@ -272,13 +272,24 @@ def claude_init_command(args: argparse.Namespace) -> None:
     try:
         print("🤖 Setting up Claude Code MCP integration...")
         
-        # Check if lumberjack-mcp command is available
-        try:
-            subprocess.run(["which", "lumberjack-mcp"], check=True, capture_output=True)
-        except subprocess.CalledProcessError:
-            print("❌ lumberjack-mcp command not found.")
-            print("Make sure you've installed lumberjack with: pip install 'lumberjack_sdk[local-server]'")
+        # Import installation detection
+        from .installation_detector import detect_installation_method
+        
+        # Detect the best installation method
+        print("🔍 Detecting lumberjack-mcp installation method...")
+        method, status = detect_installation_method()
+        print(status)
+        
+        if method is None:
+            print("\n❌ Cannot setup MCP integration - lumberjack-mcp not found.")
+            print("Please install lumberjack-sdk first:")
+            print("  pip install 'lumberjack_sdk[local-server]'")
+            print("  # OR")
+            print("  uv tool install lumberjack-sdk[local-server]")
             sys.exit(1)
+        
+        print(f"📋 Using: {method.description}")
+        print(f"🔧 Command: {method}")
         
         # Use claude mcp add command
         try:
@@ -305,8 +316,17 @@ def claude_init_command(args: argparse.Namespace) -> None:
                 print("Install from: https://claude.ai/download")
                 sys.exit(1)
             
+            # Build the command arguments based on detection method
+            mcp_add_cmd = [claude_cmd, "mcp", "add", "lumberjack"]
+            if method.args:
+                # For complex commands like uvx, use the full command + args
+                mcp_add_cmd.extend([method.command] + method.args)
+            else:
+                # For simple commands, just use the command
+                mcp_add_cmd.append(method.command)
+            
             result = subprocess.run(
-                [claude_cmd, "mcp", "add", "lumberjack", "lumberjack-mcp"],
+                mcp_add_cmd,
                 capture_output=True,
                 text=True
             )
@@ -386,13 +406,24 @@ def cursor_init_command(args: argparse.Namespace) -> None:
     try:
         print("🎯 Setting up Cursor MCP integration...")
         
-        # Check if lumberjack-mcp command is available
-        try:
-            subprocess.run(["which", "lumberjack-mcp"], check=True, capture_output=True)
-        except subprocess.CalledProcessError:
-            print("❌ lumberjack-mcp command not found.")
-            print("Make sure you've installed lumberjack with: pip install 'lumberjack_sdk[local-server]'")
+        # Import installation detection
+        from .installation_detector import detect_installation_method
+        
+        # Detect the best installation method
+        print("🔍 Detecting lumberjack-mcp installation method...")
+        method, status = detect_installation_method()
+        print(status)
+        
+        if method is None:
+            print("\n❌ Cannot setup MCP integration - lumberjack-mcp not found.")
+            print("Please install lumberjack-sdk first:")
+            print("  pip install 'lumberjack_sdk[local-server]'")
+            print("  # OR")
+            print("  uv tool install lumberjack-sdk[local-server]")
             sys.exit(1)
+        
+        print(f"📋 Using: {method.description}")
+        print(f"🔧 Command: {method}")
         
         # Determine config file path
         if args.global_config:
@@ -428,10 +459,8 @@ def cursor_init_command(args: argparse.Namespace) -> None:
                 print("📝 Creating new configuration...")
                 mcp_config = {"mcpServers": {}}
         
-        # Add or update lumberjack MCP server
-        mcp_config["mcpServers"]["lumberjack"] = {
-            "command": "lumberjack-mcp"
-        }
+        # Add or update lumberjack MCP server with detected method
+        mcp_config["mcpServers"]["lumberjack"] = method.to_mcp_config()
         
         # Write the config back
         try:

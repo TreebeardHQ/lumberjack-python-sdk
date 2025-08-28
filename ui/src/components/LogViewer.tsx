@@ -2,6 +2,9 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { VirtualizedDataTable } from "./logs/virtualized-data-table";
 import type { LogEntry, WebSocketMessage } from "@/types/logs";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useVersionCheck } from "@/hooks/useVersionCheck";
+import { UpgradeNotification } from "./UpgradeNotification";
+import { UpgradeModal } from "./UpgradeModal";
 
 const MAX_LOGS_IN_MEMORY = 50000; // Maximum number of logs to keep in memory
 const LOAD_MORE_BATCH_SIZE = 100; // Number of logs to load when paginating
@@ -12,9 +15,13 @@ export function LogViewer() {
   const [isTailing, setIsTailing] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [hasMore, setHasMore] = useState(true);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const seenLogIds = useRef<Set<string>>(new Set());
   const wsRef = useRef<WebSocket | null>(null);
   const oldestTimestamp = useRef<number | null>(null);
+
+  // Version checking hook
+  const { versionInfo, isUpgrading, performUpgrade } = useVersionCheck();
 
   // Function to trim logs array to maintain memory limit
   const trimLogsToLimit = useCallback(
@@ -287,6 +294,22 @@ export function LogViewer() {
                 🌲 Lumberjack Local development log viewer
               </p>
             </div>
+            {versionInfo && (
+              versionInfo.update_available ? (
+                <UpgradeNotification
+                  versionInfo={versionInfo}
+                  onUpgradeClick={() => setShowUpgradeModal(true)}
+                />
+              ) : (
+                <button
+                  onClick={() => setShowUpgradeModal(true)}
+                  className="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1 px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800"
+                  title="Click to check for updates"
+                >
+                  <span>v{versionInfo.current_version}</span>
+                </button>
+              )
+            )}
           </div>
         </div>
 
@@ -301,6 +324,16 @@ export function LogViewer() {
             hasMore={hasMore}
           />
         </div>
+
+        {/* Upgrade Modal */}
+        {versionInfo && (
+          <UpgradeModal
+            open={showUpgradeModal}
+            onOpenChange={setShowUpgradeModal}
+            versionInfo={versionInfo}
+            onUpgrade={performUpgrade}
+          />
+        )}
       </div>
     </TooltipProvider>
   );

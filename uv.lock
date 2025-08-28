@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.13'",
@@ -541,7 +541,7 @@ wheels = [
 
 [[package]]
 name = "lumberjack-sdk"
-version = "2.0.0.dev8"
+version = "2.0.4"
 source = { editable = "." }
 dependencies = [
     { name = "opentelemetry-instrumentation-logging" },
@@ -566,6 +566,7 @@ dev = [
     { name = "opentelemetry-instrumentation-fastapi" },
     { name = "opentelemetry-instrumentation-flask" },
     { name = "opentelemetry-proto" },
+    { name = "packaging" },
     { name = "psutil" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -592,6 +593,7 @@ local-server = [
     { name = "opentelemetry-exporter-otlp-proto-grpc" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-proto" },
+    { name = "packaging" },
     { name = "psutil" },
     { name = "requests" },
     { name = "uvicorn" },
@@ -634,6 +636,7 @@ requires-dist = [
     { name = "opentelemetry-proto", marker = "extra == 'local-server'", specifier = ">=1.27.0" },
     { name = "opentelemetry-sdk", specifier = ">=1.27.0" },
     { name = "opentelemetry-semantic-conventions", specifier = ">=0.48b0" },
+    { name = "packaging", marker = "extra == 'local-server'", specifier = ">=21.0" },
     { name = "psutil", marker = "extra == 'local-server'", specifier = ">=7.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=7.0.0" },

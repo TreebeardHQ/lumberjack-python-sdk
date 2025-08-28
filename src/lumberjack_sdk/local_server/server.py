@@ -25,6 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .database import get_database, LogEntry
 from .grpc_collector import GrpcCollector
 from .service_discovery import check_existing_server, write_server_config, update_heartbeat, cleanup_own_config, check_port_availability
+from .upgrade_utils import get_version_info, execute_upgrade
 from ..internal_utils.fallback_logger import fallback_logger
 
 
@@ -385,6 +386,54 @@ async def get_stats():
     except Exception as e:
         fallback_logger.error(f"Error getting stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/version")
+async def get_version():
+    """Get version and upgrade information."""
+    try:
+        version_info = get_version_info()
+        return version_info
+    except Exception as e:
+        fallback_logger.error(f"Error getting version info: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/upgrade")
+async def perform_upgrade():
+    """Execute the upgrade command."""
+    try:
+        # Get current version info to determine upgrade command
+        version_info = get_version_info()
+        
+        if not version_info["update_available"]:
+            return {
+                "success": False,
+                "message": "No update available"
+            }
+        
+        if not version_info["upgrade_command"]:
+            return {
+                "success": False,
+                "message": "Unable to determine upgrade command"
+            }
+        
+        # Execute the upgrade
+        upgrade_result = execute_upgrade(version_info["upgrade_command"]["command"])
+        
+        return {
+            "success": upgrade_result["success"],
+            "message": upgrade_result.get("error") or "Upgrade completed successfully",
+            "output": upgrade_result.get("output", ""),
+            "requires_restart": version_info["upgrade_command"]["requires_restart"]
+        }
+        
+    except Exception as e:
+        fallback_logger.error(f"Error performing upgrade: {e}")
+        return {
+            "success": False,
+            "message": str(e)
+        }
 
 
 @app.post("/api/logs/new")
