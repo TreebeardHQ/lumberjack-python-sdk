@@ -113,6 +113,7 @@ class Lumberjack:
     _local_server_processor: Optional[BatchLogRecordProcessor] = None
     _metrics_reader: Optional[PeriodicExportingMetricReader] = None
     _is_shutdown: bool = False
+    _is_noop: bool = False  # Track if SDK is in no-op mode
 
     _config_version: Optional[int] = None
 
@@ -122,6 +123,37 @@ class Lumberjack:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
+
+    def _should_be_noop(self) -> bool:
+        """
+        Determine if the SDK should operate in no-op mode.
+        
+        Returns True if ALL of the following conditions are met:
+        1. local_server_enabled is False (or None)
+        2. No API key is configured
+        3. No custom exporters are configured
+        
+        Returns:
+            bool: True if SDK should be no-op, False otherwise
+        """
+        if not self._config:
+            return False
+            
+        # Check condition 1: local_server_enabled must be False or None
+        if self._config.local_server_enabled:
+            return False
+            
+        # Check condition 2: No API key
+        if self._config.api_key and self._config.api_key.strip():
+            return False
+            
+        # Check condition 3: No custom exporters
+        if (self._config.custom_log_exporter or 
+            self._config.custom_span_exporter or 
+            self._config.custom_metrics_exporter):
+            return False
+            
+        return True
 
     def __init__(
         self,
@@ -260,13 +292,28 @@ class Lumberjack:
         }
         self._config = LumberjackConfig(**config_kwargs)
 
+ 
+        # Check if SDK should operate in no-op mode
+        self._is_noop = self._should_be_noop()
+
+
+
+        
+        if self._is_noop:
+            # In no-op mode, just mark as initialized and return
+            # Don't register handlers, start timers, or initialize providers
+            Lumberjack._initialized = True
+            self._using_fallback = False
+            sdk_logger.info("Lumberjack SDK initialized in no-op mode (no API key, no local server, no custom exporters)")
+            return
+
+
         # Set SDK logger level based on debug mode
         if self._config.debug_mode:
             sdk_logger.setLevel(logging.DEBUG)
         else:
             sdk_logger.setLevel(logging.INFO)
-
-        # Register exception handlers
+        # Register exception handlers (only if not no-op)
         ExceptionHandlers.register()
 
         Lumberjack._initialized = True
@@ -601,7 +648,7 @@ class Lumberjack:
         Call this method when your application is shutting down to ensure
         all data is sent to Lumberjack.
         """
-        if not self._initialized or self._is_shutdown:
+        if not self._initialized or self._is_shutdown or self._is_noop:
             return
 
         self._is_shutdown = True
@@ -888,6 +935,16 @@ class Lumberjack:
             cls._instance._config = None
             cls._instance._using_fallback = True
             cls._instance._is_shutdown = False
+            cls._instance._is_noop = False
+            
+            # Reset all provider attributes
+            cls._instance._tracer_provider = None
+            cls._instance._logger_provider = None
+            cls._instance._meter_provider = None
+            cls._instance._logger = None
+            cls._instance._log_processor = None
+            cls._instance._local_server_processor = None
+            cls._instance._metrics_reader = None
             
             # Stop flush timer if running
             if cls._instance._flush_timer:
@@ -898,6 +955,9 @@ class Lumberjack:
             if cls._instance._object_registration:
                 cls._instance._object_registration.shutdown()
                 cls._instance._object_registration = None
+            
+            # Unregister exception handlers
+            ExceptionHandlers.unregister()
                 
             # Reset SDK logger level
             sdk_logger.setLevel(logging.INFO)
@@ -913,9 +973,11 @@ class Lumberjack:
             obj: Object to register (optional, can be dict or object with attributes)
             **kwargs: Object data to register as keyword arguments. Should include an 'id' field.
         """
-        if not self._initialized:
-            sdk_logger.warning(
-                "Lumberjack is not initialized - object registration will be skipped")
+        if not self._initialized or self._is_noop:
+            # In no-op mode, silently skip object registration
+            if not self._initialized:
+                sdk_logger.warning(
+                    "Lumberjack is not initialized - object registration will be skipped")
             return
 
         if self._object_registration:
@@ -930,6 +992,10 @@ class Lumberjack:
         if not self._initialized:
             raise RuntimeError(
                 "Lumberjack must be initialized before flushing objects")
+        
+        if self._is_noop:
+            # In no-op mode, return 0 objects flushed
+            return 0
 
         if self._object_registration:
             return self._object_registration.flush_objects()
@@ -953,14 +1019,25 @@ class Lumberjack:
     @property
     def tracer(self) -> Optional[trace.Tracer]:
         """Get the OpenTelemetry tracer instance."""
+        if self._is_noop:
+            return None
         return trace.get_tracer(__name__, __version__) if self._tracer_provider else None
 
     @property
     def logger(self) -> Optional[Logger]:
         """Get the OpenTelemetry logger instance."""
+        if self._is_noop:
+            return None
         return self._logger
     
     @property
     def meter(self) -> Optional[metrics.Meter]:
         """Get the OpenTelemetry meter instance."""
+        if self._is_noop:
+            return None
         return metrics.get_meter(__name__, __version__) if self._meter_provider else None
+    
+    @property
+    def is_noop(self) -> bool:
+        """Check if SDK is in no-op mode."""
+        return self._is_noop

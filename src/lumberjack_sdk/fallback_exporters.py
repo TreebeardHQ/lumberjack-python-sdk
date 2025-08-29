@@ -46,12 +46,37 @@ class FallbackLogExporter(LogExporter):
                 
                 message = f"{log_record.body or ''}"
                 
+                # Extract logger name from attributes
+                logger_name = None
+                if log_record.attributes:
+                    # Look for logger name in various attribute keys
+                    logger_name = (log_record.attributes.get(LOGGER_NAME_KEY_RESERVED_V2) or 
+                                 log_record.attributes.get('logger_name'))
+                
                 # Add trace info right after message (grayed out)
                 trace_info = ""
                 if log_record.span_id and log_record.trace_id:
                     gray = '\033[90m'
                     reset = '\033[0m'
                     trace_info = f" {gray}[{log_record.span_id:016x}|{log_record.trace_id:032x}]{reset}"
+                
+                # Extract code location info for formatting
+                code_location = ""
+                if log_record.attributes:
+                    file_path = (log_record.attributes.get('code.file.path') or 
+                               log_record.attributes.get(FILE_KEY_RESERVED_V2))
+                    function_name = (log_record.attributes.get('code.function.name') or 
+                                   log_record.attributes.get(FUNCTION_KEY_RESERVED_V2))
+                    line_number = (log_record.attributes.get('code.line.number') or 
+                                 log_record.attributes.get(LINE_KEY_RESERVED_V2))
+                    
+                    if file_path and function_name and line_number:
+                        # Extract just the filename from the full path
+                        import os
+                        filename = os.path.basename(file_path)
+                        gray = '\033[90m'
+                        reset = '\033[0m'
+                        code_location = f" {gray}[{filename}#{function_name}:{line_number}]{reset}"
                 
                 attrs_str = ""
                 if log_record.attributes:
@@ -63,8 +88,9 @@ class FallbackLogExporter(LogExporter):
                         if k not in ['otelSpanID', 'otelTraceID', 'otelTraceSampled', 'otelServiceName']:
                             pretty_key = self._prettify_attribute_name(k)
                             
-                            # Skip our own trace/span IDs since we're handling them separately
-                            if pretty_key in ['trace_id', 'span_id']:
+                            # Skip fields we're handling specially
+                            if pretty_key in ['trace_id', 'span_id', 'logger', 'code.file.path', 
+                                            'code.function.name', 'code.line.number', 'file', 'function', 'line']:
                                 continue
                                 
                             # Handle stacktrace specially - format it nicely
@@ -83,11 +109,11 @@ class FallbackLogExporter(LogExporter):
                     if stacktrace:
                         attrs_str += f"\n{stacktrace}"
                 
-                # Add color coding only to the main message, then add trace info and attrs
-                colored_message = self._colorize_message(message, severity_text) + trace_info + attrs_str
+                # Add color coding only to the main message, then add code location, trace info and attrs
+                colored_message = self._colorize_message(message, severity_text) + code_location + trace_info + attrs_str
                 
-                # Use fallback logger with appropriate level
-                self._log_at_appropriate_level(colored_message, severity_text)
+                # Use fallback logger with appropriate level, passing logger name as extra
+                self._log_at_appropriate_level(colored_message, severity_text, logger_name)
             
             return LogExportResult.SUCCESS
         except Exception as e:
@@ -102,24 +128,29 @@ class FallbackLogExporter(LogExporter):
         """Force flush any pending logs."""
         return True
     
-    def _log_at_appropriate_level(self, message: str, severity_text: str) -> None:
+    def _log_at_appropriate_level(self, message: str, severity_text: str, logger_name: str = None) -> None:
         """Log message using the appropriate fallback logger level."""
         # Map OpenTelemetry severity to Python logging levels
         severity = (severity_text or 'INFO').upper()
         
+        # Create extra dict with logger_name if provided
+        extra = {}
+        if logger_name:
+            extra['logger_name'] = logger_name
+        
         if severity in ['TRACE', 'DEBUG']:
-            fallback_logger.debug(message)
+            fallback_logger.debug(message, extra=extra)
         elif severity == 'INFO':
-            fallback_logger.info(message)
+            fallback_logger.info(message, extra=extra)
         elif severity in ['WARN', 'WARNING']:
-            fallback_logger.warning(message)
+            fallback_logger.warning(message, extra=extra)
         elif severity == 'ERROR':
-            fallback_logger.error(message)
+            fallback_logger.error(message, extra=extra)
         elif severity in ['FATAL', 'CRITICAL']:
-            fallback_logger.critical(message)
+            fallback_logger.critical(message, extra=extra)
         else:
             # Default to info for unknown levels
-            fallback_logger.info(message)
+            fallback_logger.info(message, extra=extra)
     
     def _severity_number_to_text(self, severity_number) -> str:
         """Convert OpenTelemetry severity number to text."""
